@@ -1,4 +1,6 @@
 import Foundation
+import UIKit
+import UserNotifications
 
 extension Notification.Name {
     static let senseiModelDownloadDidUpdate = Notification.Name("sensei.modelDownloadDidUpdate")
@@ -56,6 +58,7 @@ final class BackgroundModelDownloadManager: NSObject, @unchecked Sendable {
         configuration.allowsExpensiveNetworkAccess = true
         configuration.allowsConstrainedNetworkAccess = true
         configuration.httpMaximumConnectionsPerHost = 3
+        configuration.timeoutIntervalForResource = 7 * 24 * 60 * 60
 
         return URLSession(
             configuration: configuration,
@@ -65,6 +68,7 @@ final class BackgroundModelDownloadManager: NSObject, @unchecked Sendable {
     }()
 
     private var backgroundEventsCompletionHandler: (() -> Void)?
+    private var handoffTaskIdentifier: UIBackgroundTaskIdentifier = .invalid
 
     private override init() {
         super.init()
@@ -77,7 +81,32 @@ final class BackgroundModelDownloadManager: NSObject, @unchecked Sendable {
         }
     }
 
+    func beginBackgroundHandoff() {
+        DispatchQueue.main.async { [weak self] in
+            guard let self, self.handoffTaskIdentifier == .invalid else { return }
+
+            self.handoffTaskIdentifier = UIApplication.shared.beginBackgroundTask(
+                withName: "SENSEI Model Download Handoff"
+            ) { [weak self] in
+                self?.endBackgroundHandoff()
+            }
+
+            DispatchQueue.main.asyncAfter(deadline: .now() + 25) { [weak self] in
+                self?.endBackgroundHandoff()
+            }
+        }
+    }
+
+    func endBackgroundHandoff() {
+        DispatchQueue.main.async { [weak self] in
+            guard let self, self.handoffTaskIdentifier != .invalid else { return }
+            UIApplication.shared.endBackgroundTask(self.handoffTaskIdentifier)
+            self.handoffTaskIdentifier = .invalid
+        }
+    }
+
     func startDownload(for model: LocalModelOption) async throws {
+        await requestNotificationAuthorization()
         if isModelReady(model) {
             postUpdate(model)
             return
@@ -124,6 +153,8 @@ final class BackgroundModelDownloadManager: NSObject, @unchecked Sendable {
             task.taskDescription = try encodeMetadata(
                 TaskMetadata(modelRawValue: model.rawValue, path: file.path)
             )
+            task.countOfBytesClientExpectsToReceive = max(file.size, 1)
+            task.priority = URLSessionTask.highPriority
             task.resume()
             scheduled += 1
         }
@@ -134,6 +165,12 @@ final class BackgroundModelDownloadManager: NSObject, @unchecked Sendable {
             throw BackgroundModelDownloadError.noFilesScheduled
         }
 
+        defaults.set(0, forKey: notificationMilestoneKey(for: model))
+        notify(
+            title: "SENSEI model download started",
+            body: "\(model.name) is now assigned to iOS background downloading.",
+            identifier: "sensei.model.\(model.rawValue).started"
+        )
         postUpdate(model)
     }
 
@@ -330,6 +367,10 @@ final class BackgroundModelDownloadManager: NSObject, @unchecked Sendable {
         "sensei.backgroundModel.error.\(model.rawValue)"
     }
 
+    private func notificationMilestoneKey(for model: LocalModelOption) -> String {
+        "sensei.backgroundModel.notificationMilestone.\(model.rawValue)"
+    }
+
     private func saveManifest(_ manifest: Manifest, for model: LocalModelOption) throws {
         defaults.set(
             try JSONEncoder().encode(manifest),
@@ -377,6 +418,73 @@ final class BackgroundModelDownloadManager: NSObject, @unchecked Sendable {
             name: .senseiModelDownloadDidUpdate,
             object: nil,
             userInfo: ["model": model.rawValue]
+        )
+
+        Task { [weak self] in
+            await self?.maybeNotifyProgress(for: model)
+        }
+    }
+
+    private func requestNotificationAuthorization() async {
+        _ = try? await UNUserNotificationCenter.current().requestAuthorization(
+            options: [.alert, .sound]
+        )
+    }
+
+    private func notify(title: String, body: String, identifier: String) {
+        let content = UNMutableNotificationContent()
+        content.title = title
+        content.body = body
+        content.sound = .default
+
+        UNUserNotificationCenter.current().add(
+            UNNotificationRequest(
+                identifier: identifier,
+                content: content,
+                trigger: nil
+            )
+        )
+    }
+
+    private func maybeNotifyProgress(for model: LocalModelOption) async {
+        let current = await snapshot(for: model)
+
+        if current.isReady {
+            let last = defaults.integer(forKey: notificationMilestoneKey(for: model))
+            if last < 100 {
+                defaults.set(100, forKey: notificationMilestoneKey(for: model))
+                notify(
+                    title: "SENSEI model ready",
+                    body: "\(model.name) finished downloading. Open SENSEI to load it.",
+                    identifier: "sensei.model.\(model.rawValue).complete"
+                )
+            }
+            return
+        }
+
+        guard current.isDownloading else { return }
+
+        let percent = Int(current.progress * 100)
+        let milestone: Int
+        switch percent {
+        case 75...:
+            milestone = 75
+        case 50...:
+            milestone = 50
+        case 25...:
+            milestone = 25
+        default:
+            milestone = 0
+        }
+
+        let last = defaults.integer(forKey: notificationMilestoneKey(for: model))
+        guard milestone > last else { return }
+
+        defaults.set(milestone, forKey: notificationMilestoneKey(for: model))
+        notify(
+            title: "SENSEI download \(milestone)%",
+            body: "\(model.name) is still downloading in the background.",
+            identifier: "sensei.model.\(model.rawValue).\(milestone)"
         )
     }
 
@@ -447,6 +555,14 @@ extension BackgroundModelDownloadManager: URLSessionDownloadDelegate, URLSession
             try? fileManager.removeItem(at: resumeURL)
 
             defaults.set(nil, forKey: errorKey(for: model))
+            if isModelReady(model) {
+                defaults.set(100, forKey: notificationMilestoneKey(for: model))
+                notify(
+                    title: "SENSEI model ready",
+                    body: "\(model.name) finished downloading. Open SENSEI to load it.",
+                    identifier: "sensei.model.\(model.rawValue).complete"
+                )
+            }
             postUpdate(model)
         } catch {
             defaults.set(error.localizedDescription, forKey: errorKey(for: model))
