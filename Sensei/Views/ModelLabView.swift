@@ -29,6 +29,9 @@ struct ModelLabView: View {
                     .foregroundStyle(.red)
                 }
             }
+            .task {
+                chat.refreshDownloadState()
+            }
         }
     }
 
@@ -38,7 +41,7 @@ struct ModelLabView: View {
                 .font(.caption.monospaced().weight(.bold))
                 .foregroundStyle(.red)
 
-            Text("Choose the strongest model this iPhone can run reliably. Models download once, then inference runs locally.")
+            Text("Choose the strongest model this iPhone can run reliably. Downloads are resumable and continue through normal app suspension.")
                 .font(.subheadline)
                 .foregroundStyle(.secondary)
         }
@@ -109,7 +112,11 @@ struct ModelLabView: View {
                 VStack(alignment: .leading, spacing: 3) {
                     Text(chat.statusText)
                         .font(.caption.monospaced().weight(.bold))
-                        .foregroundStyle(chat.statusText == "LOCAL" ? .red : .secondary)
+                        .foregroundStyle(
+                            ["LOCAL", "READY"].contains(chat.statusText)
+                            ? .red
+                            : .secondary
+                        )
 
                     Text(chat.modelStatusDetail)
                         .font(.caption)
@@ -119,21 +126,29 @@ struct ModelLabView: View {
                 Spacer()
             }
 
-            if chat.isLoadingModel {
+            if chat.isDownloadingModel {
                 ProgressView(value: chat.modelProgress)
                     .tint(.red)
 
-                Text("\(Int(chat.modelProgress * 100))%")
-                    .font(.caption2.monospaced())
-                    .foregroundStyle(.secondary)
+                HStack {
+                    Text("\(Int(chat.modelProgress * 100))%")
+                        .font(.caption2.monospaced())
+                        .foregroundStyle(.secondary)
+
+                    Spacer()
+
+                    Text("BACKGROUND ACTIVE")
+                        .font(.caption2.monospaced().weight(.bold))
+                        .foregroundStyle(.red)
+                }
             }
 
             Button {
                 chat.loadSelectedModel()
             } label: {
                 HStack {
-                    Image(systemName: "arrow.down.circle.fill")
-                    Text(chat.loadedModel == chat.selectedModel ? "RELOAD MODEL" : "LOAD MODEL")
+                    Image(systemName: buttonIcon)
+                    Text(buttonTitle)
                         .fontWeight(.bold)
                 }
                 .frame(maxWidth: .infinity)
@@ -141,11 +156,43 @@ struct ModelLabView: View {
                 .foregroundStyle(.white)
                 .background(Color.red, in: RoundedRectangle(cornerRadius: 14))
             }
-            .disabled(chat.isLoadingModel || chat.isThinking)
-            .opacity(chat.isLoadingModel ? 0.5 : 1)
+            .disabled(chat.isDownloadingModel || chat.isLoadingModel || chat.isThinking)
+            .opacity(chat.isDownloadingModel || chat.isLoadingModel ? 0.55 : 1)
+
+            Text("You can switch apps or lock the iPhone during the download. Do not force-quit SENSEI while a model is downloading.")
+                .font(.caption2)
+                .foregroundStyle(.secondary)
         }
         .padding(14)
         .background(.white.opacity(0.05), in: RoundedRectangle(cornerRadius: 16))
+    }
+
+    private var buttonTitle: String {
+        if chat.isDownloadingModel {
+            return "DOWNLOADING IN BACKGROUND"
+        }
+
+        if chat.isLoadingModel {
+            return "LOADING MODEL"
+        }
+
+        if chat.loadedModel == chat.selectedModel {
+            return "RELOAD LOCAL MODEL"
+        }
+
+        if chat.modelDownloadReady {
+            return "LOAD LOCAL MODEL"
+        }
+
+        return "DOWNLOAD MODEL"
+    }
+
+    private var buttonIcon: String {
+        if chat.modelDownloadReady || chat.loadedModel == chat.selectedModel {
+            return "cpu"
+        }
+
+        return "arrow.down.circle.fill"
     }
 
     private var benchmarkPanel: some View {
@@ -171,7 +218,12 @@ struct ModelLabView: View {
                 .foregroundStyle(.white)
                 .background(.white.opacity(0.09), in: RoundedRectangle(cornerRadius: 14))
             }
-            .disabled(chat.loadedModel != chat.selectedModel || chat.isLoadingModel || chat.isThinking)
+            .disabled(
+                chat.loadedModel != chat.selectedModel
+                || chat.isLoadingModel
+                || chat.isDownloadingModel
+                || chat.isThinking
+            )
 
             if let result = chat.benchmarkResult {
                 Divider().overlay(.white.opacity(0.1))
