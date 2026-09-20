@@ -15,7 +15,10 @@ struct ModelDownloadSnapshot: Sendable {
 
 final class BackgroundModelDownloadManager: NSObject, @unchecked Sendable {
     static let shared = BackgroundModelDownloadManager()
-    static let sessionIdentifier = "app.sensei.personal.model-downloads"
+    static var sessionIdentifier: String {
+        let bundleID = Bundle.main.bundleIdentifier ?? "app.sensei.personal"
+        return bundleID + ".model-downloads"
+    }
 
     private struct RemoteFile: Codable, Sendable {
         let path: String
@@ -510,6 +513,26 @@ final class BackgroundModelDownloadManager: NSObject, @unchecked Sendable {
 extension BackgroundModelDownloadManager: URLSessionDownloadDelegate, URLSessionTaskDelegate {
     func urlSession(
         _ session: URLSession,
+        taskIsWaitingForConnectivity task: URLSessionTask
+    ) {
+        guard
+            let metadata = metadata(for: task),
+            let model = LocalModelOption(rawValue: metadata.modelRawValue)
+        else {
+            return
+        }
+
+        notify(
+            title: "SENSEI waiting for connectivity",
+            body: "\(model.name) is queued by iOS and will continue automatically when connectivity is available.",
+            identifier: "sensei.model.\(model.rawValue).connectivity"
+        )
+
+        postUpdate(model)
+    }
+
+    func urlSession(
+        _ session: URLSession,
         downloadTask: URLSessionDownloadTask,
         didWriteData bytesWritten: Int64,
         totalBytesWritten: Int64,
@@ -639,9 +662,9 @@ extension BackgroundModelDownloadManager: URLSessionDownloadDelegate, URLSession
                 retryTask.resume()
 
                 notify(
-                    title: "SENSEI download waiting for network",
-                    body: "\(model.name) will continue automatically when the connection is available.",
-                    identifier: "sensei.model.\(model.rawValue).waiting"
+                    title: "SENSEI download reconnecting",
+                    body: "\(model.name) was interrupted and is being resumed automatically.",
+                    identifier: "sensei.model.\(model.rawValue).reconnecting"
                 )
 
                 postUpdate(model)
