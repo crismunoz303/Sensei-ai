@@ -585,12 +585,67 @@ extension BackgroundModelDownloadManager: URLSessionDownloadDelegate, URLSession
         if let error {
             let nsError = error as NSError
 
-            if let resumeData = nsError.userInfo[NSURLSessionDownloadTaskResumeData] as? Data {
+            let resumeData =
+                nsError.userInfo[NSURLSessionDownloadTaskResumeData] as? Data
+
+            if let resumeData {
                 storeResumeData(
                     resumeData,
                     for: model,
                     path: metadata.path
                 )
+            }
+
+            let transientCodes: Set<URLError.Code> = [
+                .timedOut,
+                .cannotFindHost,
+                .cannotConnectToHost,
+                .networkConnectionLost,
+                .dnsLookupFailed,
+                .notConnectedToInternet,
+                .dataNotAllowed,
+                .internationalRoamingOff,
+                .backgroundSessionWasDisconnected
+            ]
+
+            let urlCode = URLError.Code(rawValue: nsError.code)
+
+            if nsError.domain == NSURLErrorDomain,
+               transientCodes.contains(urlCode),
+               let manifest = loadManifest(for: model) {
+                let retryTask: URLSessionDownloadTask
+
+                if let resumeData, !resumeData.isEmpty {
+                    retryTask = backgroundSession.downloadTask(withResumeData: resumeData)
+                } else if let url = try? downloadURL(
+                    repositoryID: manifest.repositoryID,
+                    path: metadata.path
+                ) {
+                    retryTask = backgroundSession.downloadTask(with: url)
+                } else {
+                    defaults.set(error.localizedDescription, forKey: errorKey(for: model))
+                    postUpdate(model)
+                    return
+                }
+
+                retryTask.taskDescription = task.taskDescription
+
+                if let remoteFile = manifest.files.first(where: { $0.path == metadata.path }) {
+                    retryTask.countOfBytesClientExpectsToReceive = max(remoteFile.size, 1)
+                }
+
+                retryTask.priority = URLSessionTask.highPriority
+                defaults.set(nil, forKey: errorKey(for: model))
+                retryTask.resume()
+
+                notify(
+                    title: "SENSEI download waiting for network",
+                    body: "\(model.name) will continue automatically when the connection is available.",
+                    identifier: "sensei.model.\(model.rawValue).waiting"
+                )
+
+                postUpdate(model)
+                return
             }
 
             defaults.set(error.localizedDescription, forKey: errorKey(for: model))
