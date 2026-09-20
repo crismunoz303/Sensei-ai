@@ -7,8 +7,8 @@ final class ModelVaultManager: @unchecked Sendable {
     private let fileManager = FileManager.default
     private let lock = NSLock()
 
-    private let bookmarkKey = "sensei.modelVault.bookmark.v1"
-    private let nameKey = "sensei.modelVault.name.v1"
+    private let bookmarkKey = "sensei.modelVault.bookmark.v2"
+    private let nameKey = "sensei.modelVault.name.v2"
 
     private var activeURL: URL?
     private var activeScopeStarted = false
@@ -41,13 +41,40 @@ final class ModelVaultManager: @unchecked Sendable {
     }
 
     var isConfigured: Bool {
-        vaultRootURL != nil
+        guard let url = vaultRootURL else { return false }
+        return isSenseiVault(url)
     }
 
-    func remember(folder url: URL) throws {
+    func makeTemporaryVaultPackage() throws -> URL {
+        let root = fileManager.temporaryDirectory
+            .appendingPathComponent("SENSEI Model Vault.bundle", isDirectory: true)
+
+        if fileManager.fileExists(atPath: root.path) {
+            try fileManager.removeItem(at: root)
+        }
+
+        try fileManager.createDirectory(
+            at: root.appendingPathComponent("Models", isDirectory: true),
+            withIntermediateDirectories: true
+        )
+
+        let marker = root.appendingPathComponent(".sensei-model-vault.json")
+        let markerData = Data(
+            #"{"kind":"SENSEI_MODEL_VAULT","version":2}"#.utf8
+        )
+        try markerData.write(to: marker, options: .atomic)
+
+        return root
+    }
+
+    func remember(vault url: URL) throws {
         let started = url.startAccessingSecurityScopedResource()
 
         do {
+            guard isSenseiVault(url) else {
+                throw ModelVaultError.notSenseiVault
+            }
+
             let bookmark = try url.bookmarkData(
                 options: [],
                 includingResourceValuesForKeys: nil,
@@ -59,12 +86,6 @@ final class ModelVaultManager: @unchecked Sendable {
                 at: models,
                 withIntermediateDirectories: true
             )
-
-            let marker = url.appendingPathComponent(".sensei-model-vault.json")
-            let markerData = Data(
-                #"{"kind":"SENSEI_MODEL_VAULT","version":1}"#.utf8
-            )
-            try markerData.write(to: marker, options: .atomic)
 
             lock.lock()
             let oldURL = activeURL
@@ -78,7 +99,7 @@ final class ModelVaultManager: @unchecked Sendable {
             }
 
             defaults.set(bookmark, forKey: bookmarkKey)
-            defaults.set(url.lastPathComponent, forKey: nameKey)
+            defaults.set("SENSEI Model Vault", forKey: nameKey)
         } catch {
             if started {
                 url.stopAccessingSecurityScopedResource()
@@ -103,6 +124,18 @@ final class ModelVaultManager: @unchecked Sendable {
         defaults.removeObject(forKey: nameKey)
     }
 
+    private func isSenseiVault(_ url: URL) -> Bool {
+        var isDirectory: ObjCBool = false
+        guard fileManager.fileExists(atPath: url.path, isDirectory: &isDirectory),
+              isDirectory.boolValue
+        else {
+            return false
+        }
+
+        let marker = url.appendingPathComponent(".sensei-model-vault.json")
+        return fileManager.fileExists(atPath: marker.path)
+    }
+
     private func restoreAccess() {
         guard let bookmark = defaults.data(forKey: bookmarkKey) else {
             return
@@ -121,6 +154,13 @@ final class ModelVaultManager: @unchecked Sendable {
 
         let started = url.startAccessingSecurityScopedResource()
 
+        guard isSenseiVault(url) else {
+            if started {
+                url.stopAccessingSecurityScopedResource()
+            }
+            return
+        }
+
         lock.lock()
         activeURL = url
         activeScopeStarted = started
@@ -134,6 +174,17 @@ final class ModelVaultManager: @unchecked Sendable {
             ) {
                 defaults.set(refreshed, forKey: bookmarkKey)
             }
+        }
+    }
+}
+
+enum ModelVaultError: LocalizedError {
+    case notSenseiVault
+
+    var errorDescription: String? {
+        switch self {
+        case .notSenseiVault:
+            return "That item is not a SENSEI Model Vault."
         }
     }
 }
