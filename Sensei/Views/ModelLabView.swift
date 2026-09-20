@@ -1,5 +1,4 @@
 import SwiftUI
-import UniformTypeIdentifiers
 
 struct ModelLabView: View {
     @EnvironmentObject private var chat: ChatViewModel
@@ -37,21 +36,23 @@ struct ModelLabView: View {
                 chat.refreshModelVaultState()
                 chat.refreshDownloadState()
             }
-            .fileImporter(
-                isPresented: $showVaultPicker,
-                allowedContentTypes: [.folder],
-                allowsMultipleSelection: false
-            ) { result in
-                do {
-                    guard let url = try result.get().first else {
-                        return
+            .fullScreenCover(isPresented: $showVaultPicker) {
+                ModelVaultFolderPicker(
+                    onPick: { url in
+                        do {
+                            try chat.configureModelVault(url)
+                            vaultError = nil
+                            showVaultPicker = false
+                        } catch {
+                            vaultError = error.localizedDescription
+                            showVaultPicker = false
+                        }
+                    },
+                    onCancel: {
+                        showVaultPicker = false
                     }
-
-                    try chat.configureModelVault(url)
-                    vaultError = nil
-                } catch {
-                    vaultError = error.localizedDescription
-                }
+                )
+                .ignoresSafeArea()
             }
         }
     }
