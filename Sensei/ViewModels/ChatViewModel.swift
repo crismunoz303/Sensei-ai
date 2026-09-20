@@ -75,15 +75,15 @@ final class ChatViewModel: ObservableObject {
 
         if let name = vault.displayName, vault.isConfigured {
             modelVaultName = name
-            modelVaultDetail = "Models stored here survive deleting and reinstalling SENSEI. After a reinstall, choose this same folder again."
+            modelVaultDetail = "Models stored inside this vault survive deleting and reinstalling SENSEI. After a reinstall, connect the same vault item again."
         } else {
             modelVaultName = "NOT SET"
-            modelVaultDetail = "Choose a persistent Files or iCloud Drive folder. Do not use SENSEI's own app folder."
+            modelVaultDetail = "Create a persistent SENSEI Model Vault in Files or iCloud Drive before downloading models."
         }
     }
 
     func configureModelVault(_ url: URL) throws {
-        try vault.remember(folder: url)
+        try vault.remember(vault: url)
         refreshModelVaultState()
         refreshDownloadState()
     }
