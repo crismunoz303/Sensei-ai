@@ -3,6 +3,7 @@ import SwiftUI
 struct ModelLabView: View {
     @EnvironmentObject private var chat: ChatViewModel
     @Environment(\.dismiss) private var dismiss
+    @StateObject private var drive = GoogleDriveBackupManager.shared
 
     var body: some View {
         NavigationStack {
@@ -59,9 +60,42 @@ struct ModelLabView: View {
                 .font(.caption)
                 .foregroundStyle(.secondary)
 
-            Text("Google Drive connection is being enabled in this build.")
-                .font(.caption2.monospaced())
+            HStack {
+                Text(drive.status)
+                    .font(.caption2.monospaced().weight(.bold))
+                    .foregroundStyle(drive.isSignedIn ? .red : .secondary)
+                Spacer()
+                if let email = drive.accountEmail {
+                    Text(email)
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                }
+            }
+
+            Text(drive.detail)
+                .font(.caption2)
                 .foregroundStyle(.secondary)
+
+            Button {
+                Task {
+                    if drive.isSignedIn {
+                        drive.signOut()
+                    } else {
+                        try? await drive.signIn()
+                    }
+                }
+            } label: {
+                HStack {
+                    Image(systemName: drive.isSignedIn ? "rectangle.portrait.and.arrow.right" : "person.crop.circle.badge.checkmark")
+                    Text(drive.isSignedIn ? "SIGN OUT OF GOOGLE" : "SIGN IN WITH GOOGLE")
+                        .fontWeight(.bold)
+                }
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 11)
+                .foregroundStyle(.white)
+                .background(drive.isSignedIn ? .white.opacity(0.09) : Color.red, in: RoundedRectangle(cornerRadius: 14))
+            }
         }
         .padding(14)
         .background(.white.opacity(0.05), in: RoundedRectangle(cornerRadius: 16))
