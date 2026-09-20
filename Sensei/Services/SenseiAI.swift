@@ -1,4 +1,5 @@
 import Foundation
+import MLX
 import MLXHuggingFace
 import MLXLLM
 import MLXLMCommon
@@ -64,9 +65,21 @@ final class SenseiAI {
             throw SenseiAIError.modelNotDownloaded
         }
 
+        if model == .qwen35_9b {
+            let minimumRAM = UInt64(8) * 1024 * 1024 * 1024
+            guard ProcessInfo.processInfo.physicalMemory >= minimumRAM else {
+                throw SenseiAIError.insufficientMemoryFor9B
+            }
+        }
+
         sessionBox = nil
         container = nil
         loadedModel = nil
+
+        // MLX's iOS guidance recommends aggressively limiting its reusable
+        // buffer cache for multi-gigabyte LLMs to reduce jetsam pressure.
+        MLX.Memory.clearCache()
+        MLX.Memory.cacheLimit = 20 * 1024 * 1024
 
         let started = Date()
 
@@ -159,6 +172,7 @@ final class SenseiAI {
 enum SenseiAIError: LocalizedError {
     case noModelLoaded
     case modelNotDownloaded
+    case insufficientMemoryFor9B
 
     var errorDescription: String? {
         switch self {
@@ -166,6 +180,8 @@ enum SenseiAIError: LocalizedError {
             "No local SENSEI model is loaded."
         case .modelNotDownloaded:
             "This SENSEI model has not finished downloading yet."
+        case .insufficientMemoryFor9B:
+            "Qwen3.5 9B requires an iPhone reporting at least 8 GB of physical RAM. Choose the strongest smaller model instead."
         }
     }
 }
