@@ -68,7 +68,7 @@ struct ModelLabView: View {
                 .font(.caption.monospaced().weight(.bold))
                 .foregroundStyle(.red)
 
-            Text("Choose the strongest model this iPhone can run reliably. Downloads are resumable and continue through normal app suspension.")
+            Text("Choose the strongest model this iPhone can run reliably. Downloads are saved inside SENSEI, are resumable, and remain available after normal app restarts.")
                 .font(.subheadline)
                 .foregroundStyle(.secondary)
         }
@@ -273,7 +273,7 @@ struct ModelLabView: View {
             .disabled(chat.isDownloadingModel || chat.isLoadingModel || chat.isThinking)
             .opacity(chat.isDownloadingModel || chat.isLoadingModel ? 0.55 : 1)
 
-            Text("You can switch apps or lock the iPhone during the download. Do not force-quit SENSEI while a model is downloading.")
+            Text("Completed model files are stored inside SENSEI and remain available after closing or restarting the app. Do not force-quit while an active download is being handed off to iOS.")
                 .font(.caption2)
                 .foregroundStyle(.secondary)
         }
