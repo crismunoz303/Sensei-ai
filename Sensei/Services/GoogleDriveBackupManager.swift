@@ -86,7 +86,11 @@ final class GoogleDriveBackupManager: ObservableObject {
         isSignedIn = true
         accountEmail = user.profile?.email
         status = "CONNECTED"
-        detail = user.profile?.email.map { "Drive connected as \($0)." } ?? "Google Drive connected."
+        if let email = user.profile?.email {
+            detail = "Drive connected as \(email)."
+        } else {
+            detail = "Google Drive connected."
+        }
     }
 
     private func refresh(_ user: GIDGoogleUser) async throws -> GIDGoogleUser {
