@@ -5,7 +5,8 @@ import MLXLMCommon
 import HuggingFace
 import Tokenizers
 
-actor SenseiAI {
+@MainActor
+final class SenseiAI {
     static let shared = SenseiAI()
 
     private var container: ModelContainer?
