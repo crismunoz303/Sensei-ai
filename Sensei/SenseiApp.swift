@@ -2,22 +2,13 @@ import SwiftUI
 import UIKit
 @preconcurrency import UserNotifications
 
-final class SenseiAppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCenterDelegate {
+final class SenseiAppDelegate: NSObject, UIApplicationDelegate {
     func application(
         _ application: UIApplication,
         didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]? = nil
     ) -> Bool {
-        UNUserNotificationCenter.current().delegate = self
         _ = BackgroundModelDownloadManager.shared
         return true
-    }
-
-    func userNotificationCenter(
-        _ center: UNUserNotificationCenter,
-        willPresent notification: UNNotification,
-        withCompletionHandler completionHandler: @escaping (UNNotificationPresentationOptions) -> Void
-    ) {
-        completionHandler([.banner, .sound])
     }
 
     func application(
