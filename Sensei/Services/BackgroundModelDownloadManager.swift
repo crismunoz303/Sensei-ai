@@ -726,7 +726,6 @@ enum BackgroundModelDownloadError: LocalizedError {
     case emptyManifest
     case metadataEncodingFailed
     case noFilesScheduled
-    case modelVaultRequired
 
     var errorDescription: String? {
         switch self {
