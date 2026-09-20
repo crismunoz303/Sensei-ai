@@ -5,6 +5,11 @@ import MLXLMCommon
 import HuggingFace
 import Tokenizers
 
+// SENSEI serializes all access to ChatSession on MainActor.
+// MLX documents ChatSession as single-task only, so this downstream conformance
+// tells Swift 6 that our serialized usage is intentional.
+extension ChatSession: @retroactive @unchecked Sendable {}
+
 @MainActor
 final class SenseiAI {
     static let shared = SenseiAI()
