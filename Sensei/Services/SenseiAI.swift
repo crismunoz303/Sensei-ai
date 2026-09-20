@@ -1,6 +1,8 @@
 import Foundation
+import MLXHuggingFace
 import MLXLLM
 import MLXLMCommon
+import HuggingFace
 import Tokenizers
 
 // SENSEI serializes all access to ChatSession on MainActor.
@@ -70,7 +72,7 @@ final class SenseiAI {
 
         let loaded = try await LLMModelFactory.shared.loadContainer(
             from: directory,
-            using: TokenizersLoader()
+            using: #huggingFaceTokenizerLoader()
         )
 
         let newSessionBox = SenseiSessionBox(
