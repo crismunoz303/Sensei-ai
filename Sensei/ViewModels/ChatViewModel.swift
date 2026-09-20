@@ -23,6 +23,7 @@ final class ChatViewModel: ObservableObject {
     private let defaults = UserDefaults.standard
     private var lastLoadSeconds: Double = 0
     private var downloadObserver: NSObjectProtocol?
+    private var downloadFinishObserver: NSObjectProtocol?
 
     init() {
         if let raw = UserDefaults.standard.string(forKey: "sensei.selectedModel"),
@@ -59,6 +60,25 @@ final class ChatViewModel: ObservableObject {
             Task { @MainActor [weak self] in
                 guard self?.selectedModel == model else { return }
                 self?.refreshDownloadState()
+            }
+        }
+
+        downloadFinishObserver = NotificationCenter.default.addObserver(
+            forName: .senseiModelDownloadDidFinish,
+            object: nil,
+            queue: .main
+        ) { notification in
+            guard
+                let raw = notification.userInfo?["model"] as? String,
+                let model = LocalModelOption(rawValue: raw)
+            else { return }
+
+            Task { @MainActor in
+                let drive = GoogleDriveBackupManager.shared
+                guard drive.isSignedIn,
+                      let directory = BackgroundModelDownloadManager.shared.readyModelDirectory(for: model)
+                else { return }
+                try? await drive.backUpModel(model, directory: directory)
             }
         }
 
