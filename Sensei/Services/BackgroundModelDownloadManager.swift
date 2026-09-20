@@ -112,10 +112,6 @@ final class BackgroundModelDownloadManager: NSObject, @unchecked Sendable {
     func startDownload(for model: LocalModelOption) async throws {
         await requestNotificationAuthorization()
 
-        guard vault.vaultRootURL != nil else {
-            throw BackgroundModelDownloadError.modelVaultRequired
-        }
-
         if isModelReady(model) {
             postUpdate(model)
             return
@@ -316,12 +312,6 @@ final class BackgroundModelDownloadManager: NSObject, @unchecked Sendable {
     }
 
     private func modelDirectory(for model: LocalModelOption) -> URL {
-        if let vaultRoot = vault.vaultRootURL {
-            return vaultRoot
-                .appendingPathComponent("Models", isDirectory: true)
-                .appendingPathComponent(model.rawValue, isDirectory: true)
-        }
-
         let base = fileManager.urls(
             for: .applicationSupportDirectory,
             in: .userDomainMask
@@ -745,8 +735,6 @@ enum BackgroundModelDownloadError: LocalizedError {
             "SENSEI could not prepare the background download."
         case .noFilesScheduled:
             "The model is incomplete, but no download task could be scheduled."
-        case .modelVaultRequired:
-            "Create or connect a persistent SENSEI Model Vault in Files before downloading a model."
         }
     }
 }
