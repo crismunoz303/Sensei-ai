@@ -16,6 +16,13 @@ jobs:
       - name: Install XcodeGen
         run: brew install xcodegen
 
+      - name: Ensure Metal toolchain
+        run: |
+          if ! xcrun metal --version >/dev/null 2>&1; then
+            sudo xcodebuild -downloadComponent MetalToolchain
+          fi
+          xcrun metal --version
+
       - name: Generate Xcode project
         run: xcodegen generate
 
@@ -27,6 +34,8 @@ jobs:
             -configuration Release \
             -sdk iphoneos \
             -derivedDataPath build \
+            -skipPackagePluginValidation \
+            -skipMacroValidation \
             CODE_SIGNING_ALLOWED=NO \
             CODE_SIGNING_REQUIRED=NO \
             CODE_SIGN_IDENTITY="" \
@@ -34,12 +43,13 @@ jobs:
 
       - name: Package unsigned IPA
         run: |
+          rm -rf Payload
           mkdir -p Payload
           cp -R build/Build/Products/Release-iphoneos/SENSEI.app Payload/
-          zip -r SENSEI-V1-unsigned.ipa Payload
+          zip -r SENSEI-V2-MLX-unsigned.ipa Payload
 
       - name: Upload IPA
         uses: actions/upload-artifact@v4
         with:
-          name: SENSEI-V1-unsigned
-          path: SENSEI-V1-unsigned.ipa
+          name: SENSEI-V2-MLX-unsigned
+          path: SENSEI-V2-MLX-unsigned.ipa
