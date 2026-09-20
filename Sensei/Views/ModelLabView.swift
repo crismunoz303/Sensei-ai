@@ -3,9 +3,7 @@ import SwiftUI
 struct ModelLabView: View {
     @EnvironmentObject private var chat: ChatViewModel
     @Environment(\.dismiss) private var dismiss
-    @State private var showVaultPicker = false
-    @State private var vaultPickerMode: ModelVaultPackagePicker.Mode = .create
-    @State private var vaultError: String?
+    @StateObject private var drive = GoogleDriveBackupManager.shared
 
     var body: some View {
         NavigationStack {
@@ -15,7 +13,7 @@ struct ModelLabView: View {
                 ScrollView {
                     VStack(alignment: .leading, spacing: 18) {
                         intro
-                        vaultPanel
+                        drivePanel
                         modelCards
                         loadPanel
                         benchmarkPanel
@@ -34,31 +32,9 @@ struct ModelLabView: View {
                 }
             }
             .task {
-                chat.refreshModelVaultState()
                 chat.refreshDownloadState()
             }
-            .fullScreenCover(isPresented: $showVaultPicker) {
-                ModelVaultPackagePicker(
-                    mode: vaultPickerMode,
-                    onPick: { url in
-                        do {
-                            try chat.configureModelVault(url)
-                            vaultError = nil
-                        } catch {
-                            vaultError = error.localizedDescription
-                        }
-                        showVaultPicker = false
-                    },
-                    onCancel: {
-                        showVaultPicker = false
-                    },
-                    onError: { message in
-                        vaultError = message
-                        showVaultPicker = false
-                    }
-                )
-                .ignoresSafeArea()
-            }
+
         }
     }
 
@@ -68,94 +44,58 @@ struct ModelLabView: View {
                 .font(.caption.monospaced().weight(.bold))
                 .foregroundStyle(.red)
 
-            Text("Choose the strongest model this iPhone can run reliably. Downloads are resumable and continue through normal app suspension.")
+            Text("Choose the strongest model this iPhone can run reliably. Downloads are saved inside SENSEI, are resumable, and remain available after normal app restarts.")
                 .font(.subheadline)
                 .foregroundStyle(.secondary)
         }
     }
 
-    private var vaultPanel: some View {
+    private var drivePanel: some View {
         VStack(alignment: .leading, spacing: 10) {
-            HStack {
-                Image(systemName: chat.modelVaultReady ? "archivebox.fill" : "archivebox")
-                    .foregroundStyle(chat.modelVaultReady ? .red : .secondary)
+            Label("GOOGLE DRIVE BACKUP", systemImage: "externaldrive.badge.icloud")
+                .font(.caption.monospaced().weight(.bold))
+                .foregroundStyle(.red)
 
-                VStack(alignment: .leading, spacing: 3) {
-                    Text("MODEL VAULT")
-                        .font(.caption.monospaced().weight(.bold))
-                        .foregroundStyle(.red)
-
-                    Text(chat.modelVaultReady ? chat.modelVaultName : "NOT SET")
-                        .font(.subheadline.weight(.semibold))
-                        .foregroundStyle(.white)
-                }
-
-                Spacer()
-            }
-
-            Text(chat.modelVaultDetail)
+            Text("SENSEI keeps the working model on this iPhone. After Google sign-in, completed model downloads can be backed up automatically to Drive so a future IPA reinstall can restore them.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
 
-            if chat.modelVaultReady {
-                Button {
-                    vaultPickerMode = .connect
-                    showVaultPicker = true
-                } label: {
-                    HStack {
-                        Image(systemName: "link")
-                        Text("RECONNECT MODEL VAULT")
-                            .fontWeight(.bold)
-                    }
-                    .frame(maxWidth: .infinity)
-                    .padding(.vertical, 11)
-                    .foregroundStyle(.white)
-                    .background(.white.opacity(0.09), in: RoundedRectangle(cornerRadius: 14))
+            HStack {
+                Text(drive.status)
+                    .font(.caption2.monospaced().weight(.bold))
+                    .foregroundStyle(drive.isSignedIn ? .red : .secondary)
+                Spacer()
+                if let email = drive.accountEmail {
+                    Text(email)
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
                 }
-                .disabled(chat.isDownloadingModel || chat.isLoadingModel)
-            } else {
-                Button {
-                    vaultPickerMode = .create
-                    showVaultPicker = true
-                } label: {
-                    HStack {
-                        Image(systemName: "archivebox.badge.plus")
-                        Text("CREATE MODEL VAULT")
-                            .fontWeight(.bold)
-                    }
-                    .frame(maxWidth: .infinity)
-                    .padding(.vertical, 11)
-                    .foregroundStyle(.white)
-                    .background(Color.red, in: RoundedRectangle(cornerRadius: 14))
-                }
-                .disabled(chat.isDownloadingModel || chat.isLoadingModel)
-
-                Button {
-                    vaultPickerMode = .connect
-                    showVaultPicker = true
-                } label: {
-                    HStack {
-                        Image(systemName: "link")
-                        Text("CONNECT EXISTING VAULT")
-                            .fontWeight(.bold)
-                    }
-                    .frame(maxWidth: .infinity)
-                    .padding(.vertical, 11)
-                    .foregroundStyle(.white)
-                    .background(.white.opacity(0.09), in: RoundedRectangle(cornerRadius: 14))
-                }
-                .disabled(chat.isDownloadingModel || chat.isLoadingModel)
             }
 
-            if let vaultError {
-                Text(vaultError)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
-
-            Text("The vault is one persistent item in Files/iCloud Drive. Model files live inside it, so future SENSEI reinstalls can reconnect to the same vault instead of downloading the models again.")
+            Text(drive.detail)
                 .font(.caption2)
                 .foregroundStyle(.secondary)
+
+            Button {
+                Task {
+                    if drive.isSignedIn {
+                        drive.signOut()
+                    } else {
+                        try? await drive.signIn()
+                    }
+                }
+            } label: {
+                HStack {
+                    Image(systemName: drive.isSignedIn ? "rectangle.portrait.and.arrow.right" : "person.crop.circle.badge.checkmark")
+                    Text(drive.isSignedIn ? "SIGN OUT OF GOOGLE" : "SIGN IN WITH GOOGLE")
+                        .fontWeight(.bold)
+                }
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 11)
+                .foregroundStyle(.white)
+                .background(drive.isSignedIn ? .white.opacity(0.09) : Color.red, in: RoundedRectangle(cornerRadius: 14))
+            }
         }
         .padding(14)
         .background(.white.opacity(0.05), in: RoundedRectangle(cornerRadius: 16))
@@ -273,7 +213,7 @@ struct ModelLabView: View {
             .disabled(chat.isDownloadingModel || chat.isLoadingModel || chat.isThinking)
             .opacity(chat.isDownloadingModel || chat.isLoadingModel ? 0.55 : 1)
 
-            Text("You can switch apps or lock the iPhone during the download. Do not force-quit SENSEI while a model is downloading.")
+            Text("Completed model files are stored inside SENSEI and remain available after closing or restarting the app. Do not force-quit while an active download is being handed off to iOS.")
                 .font(.caption2)
                 .foregroundStyle(.secondary)
         }

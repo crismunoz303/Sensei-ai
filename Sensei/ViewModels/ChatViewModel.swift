@@ -16,17 +16,14 @@ final class ChatViewModel: ObservableObject {
     @Published var modelProgress: Double = 0
     @Published var benchmarkResult: ModelBenchmarkSnapshot?
     @Published var benchmarkError: String?
-    @Published var modelVaultReady = false
-    @Published var modelVaultName = "NOT SET"
-    @Published var modelVaultDetail = "Choose a persistent folder in Files before downloading models."
 
     private let ai = SenseiAI.shared
     private let downloads = BackgroundModelDownloadManager.shared
-    private let vault = ModelVaultManager.shared
     private let store = ConversationStore()
     private let defaults = UserDefaults.standard
     private var lastLoadSeconds: Double = 0
     private var downloadObserver: NSObjectProtocol?
+    private var downloadFinishObserver: NSObjectProtocol?
 
     init() {
         if let raw = UserDefaults.standard.string(forKey: "sensei.selectedModel"),
@@ -41,7 +38,7 @@ final class ChatViewModel: ObservableObject {
             messages = [
                 ChatMessage(
                     role: .assistant,
-                    text: "SENSEI is ready for its independent local model. Open MODEL LAB and download the model you want. The download can continue while SENSEI is suspended or the phone is locked."
+                    text: "SENSEI is ready for its independent local model. Open MODEL LAB and download the model you want. Completed model files stay saved inside SENSEI across normal app restarts."
                 )
             ]
         } else {
@@ -66,25 +63,25 @@ final class ChatViewModel: ObservableObject {
             }
         }
 
-        refreshModelVaultState()
-        refreshDownloadState()
-    }
+        downloadFinishObserver = NotificationCenter.default.addObserver(
+            forName: .senseiModelDownloadDidFinish,
+            object: nil,
+            queue: .main
+        ) { notification in
+            guard
+                let raw = notification.userInfo?["model"] as? String,
+                let model = LocalModelOption(rawValue: raw)
+            else { return }
 
-    func refreshModelVaultState() {
-        modelVaultReady = vault.isConfigured
-
-        if let name = vault.displayName, vault.isConfigured {
-            modelVaultName = name
-            modelVaultDetail = "Models stored inside this vault survive deleting and reinstalling SENSEI. After a reinstall, connect the same vault item again."
-        } else {
-            modelVaultName = "NOT SET"
-            modelVaultDetail = "Create a persistent SENSEI Model Vault in Files or iCloud Drive before downloading models."
+            Task { @MainActor in
+                let drive = GoogleDriveBackupManager.shared
+                guard drive.isSignedIn,
+                      let directory = BackgroundModelDownloadManager.shared.readyModelDirectory(for: model)
+                else { return }
+                try? await drive.backUpModel(model, directory: directory)
+            }
         }
-    }
 
-    func configureModelVault(_ url: URL) throws {
-        try vault.remember(vault: url)
-        refreshModelVaultState()
         refreshDownloadState()
     }
 
@@ -137,13 +134,6 @@ final class ChatViewModel: ObservableObject {
 
         if downloads.isModelReady(model) {
             loadModelFromDisk(model)
-            return
-        }
-
-        guard vault.isConfigured else {
-            statusText = "VAULT NEEDED"
-            modelStatusDetail = "Choose a persistent Model Vault folder first."
-            benchmarkError = "Choose a Model Vault before downloading."
             return
         }
 

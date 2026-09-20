@@ -4,6 +4,7 @@ import UserNotifications
 
 extension Notification.Name {
     static let senseiModelDownloadDidUpdate = Notification.Name("sensei.modelDownloadDidUpdate")
+    static let senseiModelDownloadDidFinish = Notification.Name("sensei.modelDownloadDidFinish")
 }
 
 struct ModelDownloadSnapshot: Sendable {
@@ -43,7 +44,6 @@ final class BackgroundModelDownloadManager: NSObject, @unchecked Sendable {
 
     private let fileManager = FileManager.default
     private let defaults = UserDefaults.standard
-    private let vault = ModelVaultManager.shared
 
     private let delegateQueue: OperationQueue = {
         let queue = OperationQueue()
@@ -111,10 +111,6 @@ final class BackgroundModelDownloadManager: NSObject, @unchecked Sendable {
 
     func startDownload(for model: LocalModelOption) async throws {
         await requestNotificationAuthorization()
-
-        guard vault.vaultRootURL != nil else {
-            throw BackgroundModelDownloadError.modelVaultRequired
-        }
 
         if isModelReady(model) {
             postUpdate(model)
@@ -256,6 +252,10 @@ final class BackgroundModelDownloadManager: NSObject, @unchecked Sendable {
         isModelReady(model) ? modelDirectory(for: model) : nil
     }
 
+    func modelDirectoryURL(for model: LocalModelOption) -> URL {
+        modelDirectory(for: model)
+    }
+
     private func fetchManifest(for model: LocalModelOption) async throws -> Manifest {
         let repo = model.repositoryID
         let urlString =
@@ -316,12 +316,6 @@ final class BackgroundModelDownloadManager: NSObject, @unchecked Sendable {
     }
 
     private func modelDirectory(for model: LocalModelOption) -> URL {
-        if let vaultRoot = vault.vaultRootURL {
-            return vaultRoot
-                .appendingPathComponent("Models", isDirectory: true)
-                .appendingPathComponent(model.rawValue, isDirectory: true)
-        }
-
         let base = fileManager.urls(
             for: .applicationSupportDirectory,
             in: .userDomainMask
@@ -492,6 +486,7 @@ final class BackgroundModelDownloadManager: NSObject, @unchecked Sendable {
             let last = defaults.integer(forKey: notificationMilestoneKey(for: model))
             if last < 100 {
                 defaults.set(100, forKey: notificationMilestoneKey(for: model))
+                NotificationCenter.default.post(name: .senseiModelDownloadDidFinish, object: nil, userInfo: ["model": model.rawValue])
                 notify(
                     title: "SENSEI model ready",
                     body: "\(model.name) finished downloading. Open SENSEI to load it.",
@@ -731,7 +726,6 @@ enum BackgroundModelDownloadError: LocalizedError {
     case emptyManifest
     case metadataEncodingFailed
     case noFilesScheduled
-    case modelVaultRequired
 
     var errorDescription: String? {
         switch self {
@@ -745,8 +739,6 @@ enum BackgroundModelDownloadError: LocalizedError {
             "SENSEI could not prepare the background download."
         case .noFilesScheduled:
             "The model is incomplete, but no download task could be scheduled."
-        case .modelVaultRequired:
-            "Create or connect a persistent SENSEI Model Vault in Files before downloading a model."
         }
     }
 }
