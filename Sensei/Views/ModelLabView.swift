@@ -1,8 +1,11 @@
 import SwiftUI
+import UniformTypeIdentifiers
 
 struct ModelLabView: View {
     @EnvironmentObject private var chat: ChatViewModel
     @Environment(\.dismiss) private var dismiss
+    @State private var showVaultPicker = false
+    @State private var vaultError: String?
 
     var body: some View {
         NavigationStack {
@@ -12,6 +15,7 @@ struct ModelLabView: View {
                 ScrollView {
                     VStack(alignment: .leading, spacing: 18) {
                         intro
+                        vaultPanel
                         modelCards
                         loadPanel
                         benchmarkPanel
@@ -30,7 +34,24 @@ struct ModelLabView: View {
                 }
             }
             .task {
+                chat.refreshModelVaultState()
                 chat.refreshDownloadState()
+            }
+            .fileImporter(
+                isPresented: $showVaultPicker,
+                allowedContentTypes: [.folder],
+                allowsMultipleSelection: false
+            ) { result in
+                do {
+                    guard let url = try result.get().first else {
+                        return
+                    }
+
+                    try chat.configureModelVault(url)
+                    vaultError = nil
+                } catch {
+                    vaultError = error.localizedDescription
+                }
             }
         }
     }
@@ -45,6 +66,58 @@ struct ModelLabView: View {
                 .font(.subheadline)
                 .foregroundStyle(.secondary)
         }
+    }
+
+    private var vaultPanel: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack {
+                Image(systemName: chat.modelVaultReady ? "externaldrive.fill.badge.checkmark" : "externaldrive.badge.questionmark")
+                    .foregroundStyle(chat.modelVaultReady ? .red : .secondary)
+
+                VStack(alignment: .leading, spacing: 3) {
+                    Text("MODEL VAULT")
+                        .font(.caption.monospaced().weight(.bold))
+                        .foregroundStyle(.red)
+
+                    Text(chat.modelVaultReady ? chat.modelVaultName : "NOT SET")
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundStyle(.white)
+                }
+
+                Spacer()
+            }
+
+            Text(chat.modelVaultDetail)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+
+            Button {
+                showVaultPicker = true
+            } label: {
+                HStack {
+                    Image(systemName: "folder.badge.plus")
+                    Text(chat.modelVaultReady ? "CHANGE / RECONNECT VAULT" : "CHOOSE MODEL VAULT")
+                        .fontWeight(.bold)
+                }
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 11)
+                .foregroundStyle(.white)
+                .background(.white.opacity(0.09), in: RoundedRectangle(cornerRadius: 14))
+            }
+            .disabled(chat.isDownloadingModel || chat.isLoadingModel)
+
+            if let vaultError {
+                Text(vaultError)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
+            Text("Use a folder in Files or iCloud Drive that exists outside SENSEI. After reinstalling the IPA, choose the same folder again and SENSEI will detect completed models without downloading them again.")
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+        }
+        .padding(14)
+        .background(.white.opacity(0.05), in: RoundedRectangle(cornerRadius: 16))
     }
 
     private var modelCards: some View {
