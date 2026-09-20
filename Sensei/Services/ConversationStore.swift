@@ -1,7 +1,7 @@
 import Foundation
 
 final class ConversationStore {
-    private let key = "sensei.chat.messages.v1"
+    private let key = "sensei.chat.messages.v2"
     private let defaults = UserDefaults.standard
 
     func load() -> [ChatMessage] {
