@@ -32,6 +32,21 @@ targets:
       path: Sensei/Sensei.entitlements
       properties:
         com.apple.developer.kernel.increased-memory-limit: true
+    info:
+      path: Sensei/Info.plist
+      properties:
+        CFBundleDisplayName: SENSEI
+        CFBundleIdentifier: $(PRODUCT_BUNDLE_IDENTIFIER)
+        CFBundleName: $(PRODUCT_NAME)
+        CFBundlePackageType: APPL
+        CFBundleShortVersionString: "1.0"
+        CFBundleVersion: "1"
+        UILaunchScreen: {}
+        GIDClientID: 934355792148-tlle93u7lt07l9vmj9kpttdfonk3lrer.apps.googleusercontent.com
+        CFBundleURLTypes:
+          - CFBundleTypeRole: Editor
+            CFBundleURLSchemes:
+              - com.googleusercontent.apps.934355792148-tlle93u7lt07l9vmj9kpttdfonk3lrer
     dependencies:
       - package: MLXSwift
         product: MLX
@@ -53,9 +68,7 @@ targets:
         PRODUCT_NAME: SENSEI
         SWIFT_VERSION: 6.2
         TARGETED_DEVICE_FAMILY: "1"
-        GENERATE_INFOPLIST_FILE: YES
+        GENERATE_INFOPLIST_FILE: NO
         INFOPLIST_KEY_CFBundleDisplayName: SENSEI
         INFOPLIST_KEY_UILaunchScreen_Generation: YES
-        INFOPLIST_KEY_GIDClientID: 934355792148-tlle93u7lt07l9vmj9kpttdfonk3lrer.apps.googleusercontent.com
-        INFOPLIST_KEY_CFBundleURLTypes_0_CFBundleURLSchemes_0: com.googleusercontent.apps.934355792148-tlle93u7lt07l9vmj9kpttdfonk3lrer
         CODE_SIGN_STYLE: Automatic
