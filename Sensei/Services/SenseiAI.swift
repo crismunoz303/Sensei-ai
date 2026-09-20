@@ -185,9 +185,9 @@ enum SenseiAIError: LocalizedError {
     var errorDescription: String? {
         switch self {
         case .noModelLoaded:
-            "No local SENSEI model is loaded."
+            return "No local SENSEI model is loaded."
         case .modelNotDownloaded:
-            "This SENSEI model has not finished downloading yet."
+            return "This SENSEI model has not finished downloading yet."
         case .insufficientMemoryFor9B(let detectedBytes):
             let detectedGB = Double(detectedBytes) / 1_000_000_000
             return String(
