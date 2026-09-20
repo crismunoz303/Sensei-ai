@@ -2,16 +2,28 @@ import SwiftUI
 import UIKit
 import UniformTypeIdentifiers
 
-struct ModelVaultFolderPicker: UIViewControllerRepresentable {
+struct ModelVaultPackagePicker: UIViewControllerRepresentable {
+    enum Mode {
+        case create
+        case connect
+    }
+
+    let mode: Mode
     let onPick: @MainActor (URL) -> Void
     let onCancel: @MainActor () -> Void
+    let onError: @MainActor (String) -> Void
 
     func makeCoordinator() -> Coordinator {
-        Coordinator(onPick: onPick, onCancel: onCancel)
+        Coordinator(
+            onPick: onPick,
+            onCancel: onCancel,
+            onError: onError
+        )
     }
 
     func makeUIViewController(context: Context) -> PickerHostViewController {
         let host = PickerHostViewController()
+        host.mode = mode
         host.coordinator = context.coordinator
         return host
     }
@@ -20,11 +32,13 @@ struct ModelVaultFolderPicker: UIViewControllerRepresentable {
         _ uiViewController: PickerHostViewController,
         context: Context
     ) {
+        uiViewController.mode = mode
         uiViewController.coordinator = context.coordinator
     }
 
     @MainActor
     final class PickerHostViewController: UIViewController {
+        var mode: Mode = .create
         weak var coordinator: Coordinator?
         private var hasPresentedPicker = false
 
@@ -34,13 +48,31 @@ struct ModelVaultFolderPicker: UIViewControllerRepresentable {
             guard !hasPresentedPicker else { return }
             hasPresentedPicker = true
 
-            let picker = UIDocumentPickerViewController(
-                forOpeningContentTypes: [.folder]
-            )
-            picker.delegate = coordinator
-            picker.allowsMultipleSelection = false
-            picker.modalPresentationStyle = .fullScreen
-            present(picker, animated: true)
+            do {
+                let picker: UIDocumentPickerViewController
+
+                switch mode {
+                case .create:
+                    let packageURL = try ModelVaultManager.shared.makeTemporaryVaultPackage()
+                    picker = UIDocumentPickerViewController(
+                        forExporting: [packageURL],
+                        asCopy: false
+                    )
+
+                case .connect:
+                    picker = UIDocumentPickerViewController(
+                        forOpeningContentTypes: [.bundle],
+                        asCopy: false
+                    )
+                }
+
+                picker.delegate = coordinator
+                picker.allowsMultipleSelection = false
+                picker.modalPresentationStyle = .fullScreen
+                present(picker, animated: true)
+            } catch {
+                coordinator?.report(error.localizedDescription)
+            }
         }
     }
 
@@ -48,13 +80,16 @@ struct ModelVaultFolderPicker: UIViewControllerRepresentable {
     final class Coordinator: NSObject, UIDocumentPickerDelegate {
         let onPick: @MainActor (URL) -> Void
         let onCancel: @MainActor () -> Void
+        let onError: @MainActor (String) -> Void
 
         init(
             onPick: @escaping @MainActor (URL) -> Void,
-            onCancel: @escaping @MainActor () -> Void
+            onCancel: @escaping @MainActor () -> Void,
+            onError: @escaping @MainActor (String) -> Void
         ) {
             self.onPick = onPick
             self.onCancel = onCancel
+            self.onError = onError
         }
 
         func documentPicker(
@@ -73,6 +108,10 @@ struct ModelVaultFolderPicker: UIViewControllerRepresentable {
             _ controller: UIDocumentPickerViewController
         ) {
             onCancel()
+        }
+
+        func report(_ message: String) {
+            onError(message)
         }
     }
 }
