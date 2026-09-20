@@ -746,7 +746,7 @@ enum BackgroundModelDownloadError: LocalizedError {
         case .noFilesScheduled:
             "The model is incomplete, but no download task could be scheduled."
         case .modelVaultRequired:
-            "Choose a persistent Model Vault folder in Files before downloading a model."
+            "Create or connect a persistent SENSEI Model Vault in Files before downloading a model."
         }
     }
 }
