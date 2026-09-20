@@ -43,6 +43,7 @@ final class BackgroundModelDownloadManager: NSObject, @unchecked Sendable {
 
     private let fileManager = FileManager.default
     private let defaults = UserDefaults.standard
+    private let vault = ModelVaultManager.shared
 
     private let delegateQueue: OperationQueue = {
         let queue = OperationQueue()
@@ -110,6 +111,11 @@ final class BackgroundModelDownloadManager: NSObject, @unchecked Sendable {
 
     func startDownload(for model: LocalModelOption) async throws {
         await requestNotificationAuthorization()
+
+        guard vault.vaultRootURL != nil else {
+            throw BackgroundModelDownloadError.modelVaultRequired
+        }
+
         if isModelReady(model) {
             postUpdate(model)
             return
@@ -310,6 +316,12 @@ final class BackgroundModelDownloadManager: NSObject, @unchecked Sendable {
     }
 
     private func modelDirectory(for model: LocalModelOption) -> URL {
+        if let vaultRoot = vault.vaultRootURL {
+            return vaultRoot
+                .appendingPathComponent("Models", isDirectory: true)
+                .appendingPathComponent(model.rawValue, isDirectory: true)
+        }
+
         let base = fileManager.urls(
             for: .applicationSupportDirectory,
             in: .userDomainMask
@@ -374,14 +386,38 @@ final class BackgroundModelDownloadManager: NSObject, @unchecked Sendable {
         "sensei.backgroundModel.notificationMilestone.\(model.rawValue)"
     }
 
+    private func manifestFileURL(for model: LocalModelOption) -> URL {
+        modelDirectory(for: model)
+            .appendingPathComponent(".sensei-manifest.json")
+    }
+
     private func saveManifest(_ manifest: Manifest, for model: LocalModelOption) throws {
+        let data = try JSONEncoder().encode(manifest)
+
         defaults.set(
-            try JSONEncoder().encode(manifest),
+            data,
             forKey: manifestKey(for: model)
+        )
+
+        let directory = modelDirectory(for: model)
+        try fileManager.createDirectory(
+            at: directory,
+            withIntermediateDirectories: true
+        )
+        try data.write(
+            to: manifestFileURL(for: model),
+            options: .atomic
         )
     }
 
     private func loadManifest(for model: LocalModelOption) -> Manifest? {
+        let persistentURL = manifestFileURL(for: model)
+
+        if let data = try? Data(contentsOf: persistentURL),
+           let manifest = try? JSONDecoder().decode(Manifest.self, from: data) {
+            return manifest
+        }
+
         guard let data = defaults.data(forKey: manifestKey(for: model)) else {
             return nil
         }
@@ -695,6 +731,7 @@ enum BackgroundModelDownloadError: LocalizedError {
     case emptyManifest
     case metadataEncodingFailed
     case noFilesScheduled
+    case modelVaultRequired
 
     var errorDescription: String? {
         switch self {
@@ -708,6 +745,8 @@ enum BackgroundModelDownloadError: LocalizedError {
             "SENSEI could not prepare the background download."
         case .noFilesScheduled:
             "The model is incomplete, but no download task could be scheduled."
+        case .modelVaultRequired:
+            "Choose a persistent Model Vault folder in Files before downloading a model."
         }
     }
 }
