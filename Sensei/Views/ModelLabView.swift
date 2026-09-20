@@ -4,6 +4,7 @@ struct ModelLabView: View {
     @EnvironmentObject private var chat: ChatViewModel
     @Environment(\.dismiss) private var dismiss
     @State private var showVaultPicker = false
+    @State private var vaultPickerMode: ModelVaultPackagePicker.Mode = .create
     @State private var vaultError: String?
 
     var body: some View {
@@ -37,18 +38,22 @@ struct ModelLabView: View {
                 chat.refreshDownloadState()
             }
             .fullScreenCover(isPresented: $showVaultPicker) {
-                ModelVaultFolderPicker(
+                ModelVaultPackagePicker(
+                    mode: vaultPickerMode,
                     onPick: { url in
                         do {
                             try chat.configureModelVault(url)
                             vaultError = nil
-                            showVaultPicker = false
                         } catch {
                             vaultError = error.localizedDescription
-                            showVaultPicker = false
                         }
+                        showVaultPicker = false
                     },
                     onCancel: {
+                        showVaultPicker = false
+                    },
+                    onError: { message in
+                        vaultError = message
                         showVaultPicker = false
                     }
                 )
@@ -72,7 +77,7 @@ struct ModelLabView: View {
     private var vaultPanel: some View {
         VStack(alignment: .leading, spacing: 10) {
             HStack {
-                Image(systemName: chat.modelVaultReady ? "externaldrive.fill.badge.checkmark" : "externaldrive.badge.questionmark")
+                Image(systemName: chat.modelVaultReady ? "archivebox.fill" : "archivebox")
                     .foregroundStyle(chat.modelVaultReady ? .red : .secondary)
 
                 VStack(alignment: .leading, spacing: 3) {
@@ -92,20 +97,55 @@ struct ModelLabView: View {
                 .font(.caption)
                 .foregroundStyle(.secondary)
 
-            Button {
-                showVaultPicker = true
-            } label: {
-                HStack {
-                    Image(systemName: "folder.badge.plus")
-                    Text(chat.modelVaultReady ? "CHANGE / RECONNECT VAULT" : "CHOOSE MODEL VAULT")
-                        .fontWeight(.bold)
+            if chat.modelVaultReady {
+                Button {
+                    vaultPickerMode = .connect
+                    showVaultPicker = true
+                } label: {
+                    HStack {
+                        Image(systemName: "link")
+                        Text("RECONNECT MODEL VAULT")
+                            .fontWeight(.bold)
+                    }
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 11)
+                    .foregroundStyle(.white)
+                    .background(.white.opacity(0.09), in: RoundedRectangle(cornerRadius: 14))
                 }
-                .frame(maxWidth: .infinity)
-                .padding(.vertical, 11)
-                .foregroundStyle(.white)
-                .background(.white.opacity(0.09), in: RoundedRectangle(cornerRadius: 14))
+                .disabled(chat.isDownloadingModel || chat.isLoadingModel)
+            } else {
+                Button {
+                    vaultPickerMode = .create
+                    showVaultPicker = true
+                } label: {
+                    HStack {
+                        Image(systemName: "archivebox.badge.plus")
+                        Text("CREATE MODEL VAULT")
+                            .fontWeight(.bold)
+                    }
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 11)
+                    .foregroundStyle(.white)
+                    .background(Color.red, in: RoundedRectangle(cornerRadius: 14))
+                }
+                .disabled(chat.isDownloadingModel || chat.isLoadingModel)
+
+                Button {
+                    vaultPickerMode = .connect
+                    showVaultPicker = true
+                } label: {
+                    HStack {
+                        Image(systemName: "link")
+                        Text("CONNECT EXISTING VAULT")
+                            .fontWeight(.bold)
+                    }
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 11)
+                    .foregroundStyle(.white)
+                    .background(.white.opacity(0.09), in: RoundedRectangle(cornerRadius: 14))
+                }
+                .disabled(chat.isDownloadingModel || chat.isLoadingModel)
             }
-            .disabled(chat.isDownloadingModel || chat.isLoadingModel)
 
             if let vaultError {
                 Text(vaultError)
@@ -113,7 +153,7 @@ struct ModelLabView: View {
                     .foregroundStyle(.secondary)
             }
 
-            Text("Use a folder in Files or iCloud Drive that exists outside SENSEI. After reinstalling the IPA, choose the same folder again and SENSEI will detect completed models without downloading them again.")
+            Text("The vault is one persistent item in Files/iCloud Drive. Model files live inside it, so future SENSEI reinstalls can reconnect to the same vault instead of downloading the models again.")
                 .font(.caption2)
                 .foregroundStyle(.secondary)
         }
