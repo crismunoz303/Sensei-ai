@@ -1,122 +1,162 @@
 import Foundation
-import FoundationModels
-
-struct SenseiModelStatus: Sendable {
-    let isAvailable: Bool
-    let badge: String
-    let message: String
-}
+import MLXHuggingFace
+import MLXLLM
+import MLXLMCommon
+import HuggingFace
+import Tokenizers
 
 actor SenseiAI {
     static let shared = SenseiAI()
 
-    private let model = SystemLanguageModel.default
+    private var container: ModelContainer?
+    private var session: ChatSession?
+    private var loadedModel: LocalModelOption?
 
     static let instructions = """
-    You are SENSEI, a private on-device personal AI assistant.
+    You are SENSEI, a private personal AI running locally on the user's iPhone.
 
     Core behavior:
-    - Be accurate, concise, useful, direct, and conversational.
-    - Answer the user's requests normally whenever the underlying model permits it.
-    - Do not create additional refusal rules of your own.
+    - Be accurate, direct, useful, and conversational.
+    - Answer the user's requests normally whenever the model can answer them.
+    - Do not invent extra refusal rules.
     - Do not refuse merely because a request is subjective, opinion-based, edgy, unconventional, controversial, approximate, speculative, or depends on judgment.
-    - When asked for opinions, comparisons, self-description, strengths, weaknesses, intelligence, preferences, or creative judgment, answer plainly and explain your reasoning when useful.
-    - If you are uncertain, say so briefly and still provide the best answer you can.
-    - Never pretend to have current information, internet access, sensors, files, device access, or other capabilities that were not actually provided to you.
-    - Clearly distinguish between something you cannot do because the capability is unavailable and something the model itself will not produce.
-    - Help with everyday questions, coding, engineering, planning, technical projects, brainstorming, writing, analysis, and problem solving.
-    - Prefer practical answers over canned disclaimers, moralizing, or unnecessary warnings.
-    - Protect the user's privacy.
+    - If uncertain, state the uncertainty briefly and still give the best useful answer you can.
+    - When asked about your own abilities, strengths, weaknesses, intelligence, or preferences, answer plainly.
+    - Never pretend to have internet access, sensors, files, current data, or device access unless SENSEI has actually been given that capability.
+    - Prefer practical answers over filler, canned disclaimers, moralizing, or unnecessary warnings.
+    - Protect the user's private information.
     """
 
-    func status() -> SenseiModelStatus {
-        switch model.availability {
-        case .available:
-            return SenseiModelStatus(
-                isAvailable: true,
-                badge: "LOCAL",
-                message: "Apple Intelligence is ready. SENSEI is running on-device."
+    func currentModel() -> LocalModelOption? {
+        loadedModel
+    }
+
+    func load(
+        model: LocalModelOption,
+        progressHandler: @escaping @MainActor @Sendable (Double) -> Void
+    ) async throws -> Double {
+        if loadedModel == model, container != nil, session != nil {
+            await progressHandler(1.0)
+            return 0
+        }
+
+        session = nil
+        container = nil
+        loadedModel = nil
+
+        let started = Date()
+        let configuration = configuration(for: model)
+
+        let loaded = try await #huggingFaceLoadModelContainer(
+            configuration: configuration,
+            progressHandler: { progress in
+                Task { @MainActor in
+                    progressHandler(progress.fractionCompleted)
+                }
+            }
+        )
+
+        let newSession = ChatSession(
+            loaded,
+            instructions: Self.instructions
+        )
+
+        container = loaded
+        session = newSession
+        loadedModel = model
+
+        await progressHandler(1.0)
+        return Date().timeIntervalSince(started)
+    }
+
+    func reply(to prompt: String) async throws -> String {
+        guard let session else {
+            throw SenseiAIError.noModelLoaded
+        }
+
+        return try await session.respond(to: prompt)
+    }
+
+    func resetConversation() {
+        guard let container else {
+            session = nil
+            return
+        }
+
+        session = ChatSession(
+            container,
+            instructions: Self.instructions
+        )
+    }
+
+    func benchmarkCurrent(loadSeconds: Double = 0) async throws -> ModelBenchmarkSnapshot {
+        guard let container, let model = loadedModel else {
+            throw SenseiAIError.noModelLoaded
+        }
+
+        let benchmarkInstructions = """
+        This is a deterministic reasoning sanity test.
+        Follow the requested output format exactly and do not add explanation.
+        """
+
+        let benchmarkSession = ChatSession(
+            container,
+            instructions: benchmarkInstructions
+        )
+
+        let prompt = """
+        Return exactly one line in this format:
+        A=<number>;B=<YES or NO>;C=<number>
+
+        A: A tank is 3/5 full. After 24 liters are added it is 9/10 full. What is its total capacity in liters?
+        B: All norps are blins. No blins are zats. Can any norp be a zat?
+        C: What is 7 + 3 * 4 - 5?
+        """
+
+        let started = Date()
+        let response = try await benchmarkSession.respond(to: prompt)
+        let responseSeconds = Date().timeIntervalSince(started)
+
+        let normalized = response
+            .uppercased()
+            .replacingOccurrences(of: " ", with: "")
+            .replacingOccurrences(of: "\n", with: "")
+
+        let passed =
+            normalized.contains("A=80")
+            && normalized.contains("B=NO")
+            && normalized.contains("C=14")
+
+        return ModelBenchmarkSnapshot(
+            model: model,
+            loadSeconds: loadSeconds,
+            responseSeconds: responseSeconds,
+            reasoningPassed: passed,
+            response: response
+        )
+    }
+
+    private func configuration(for model: LocalModelOption) -> ModelConfiguration {
+        switch model {
+        case .qwen3_8b:
+            return LLMRegistry.qwen3_8b_4bit
+
+        case .qwen35_9b, .qwen35_4b:
+            return ModelConfiguration(
+                id: model.repositoryID,
+                extraEOSTokens: ["<|im_end|>"]
             )
-
-        case .unavailable(let reason):
-            switch reason {
-            case .appleIntelligenceNotEnabled:
-                return SenseiModelStatus(
-                    isAvailable: false,
-                    badge: "AI OFF",
-                    message: "Apple Intelligence is turned off. Turn it on in Settings > Apple Intelligence & Siri, then reopen SENSEI."
-                )
-
-            case .deviceNotEligible:
-                return SenseiModelStatus(
-                    isAvailable: false,
-                    badge: "NO SUPPORT",
-                    message: "This device is not eligible for the Apple Intelligence on-device model."
-                )
-
-            case .modelNotReady:
-                return SenseiModelStatus(
-                    isAvailable: false,
-                    badge: "MODEL WAIT",
-                    message: "Apple Intelligence is enabled, but its on-device model is not ready yet. The model assets may still be downloading or temporarily unavailable. Try again after Apple Intelligence finishes preparing."
-                )
-
-            @unknown default:
-                return SenseiModelStatus(
-                    isAvailable: false,
-                    badge: "UNAVAILABLE",
-                    message: "The on-device Apple Intelligence model is unavailable for an unknown system reason."
-                )
-            }
         }
-    }
-
-    func reply(to prompt: String, history: [ChatMessage]) async throws -> String {
-        guard model.isAvailable else {
-            throw SenseiAIError.modelUnavailable
-        }
-
-        let recentContext = history
-            .suffix(8)
-            .map { message in
-                let role = message.role == .user ? "USER" : "SENSEI"
-                return "\(role): \(clip(message.text, limit: 700))"
-            }
-            .joined(separator: "\n\n")
-
-        let request: String
-        if recentContext.isEmpty {
-            request = prompt
-        } else {
-            request = """
-            Here is recent local conversation context. Use it only when relevant.
-
-            \(recentContext)
-
-            CURRENT USER MESSAGE:
-            \(prompt)
-            """
-        }
-
-        let session = LanguageModelSession(instructions: Self.instructions)
-        let response = try await session.respond(to: request)
-        return response.content
-    }
-
-    private func clip(_ text: String, limit: Int) -> String {
-        guard text.count > limit else { return text }
-        let end = text.index(text.startIndex, offsetBy: limit)
-        return String(text[..<end]) + "…"
     }
 }
 
 enum SenseiAIError: LocalizedError {
-    case modelUnavailable
+    case noModelLoaded
 
     var errorDescription: String? {
         switch self {
-        case .modelUnavailable:
-            return "The on-device Apple Intelligence model is not available right now."
+        case .noModelLoaded:
+            return "No local SENSEI model is loaded."
         }
     }
 }
