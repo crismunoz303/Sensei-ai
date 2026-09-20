@@ -18,7 +18,7 @@ final class ChatViewModel: ObservableObject {
             messages = [
                 ChatMessage(
                     role: .assistant,
-                    text: "SENSEI online. I run locally on your iPhone when Apple Intelligence is available."
+                    text: "SENSEI online. Checking the on-device Apple Intelligence model…"
                 )
             ]
         } else {
@@ -31,8 +31,8 @@ final class ChatViewModel: ObservableObject {
     }
 
     func refreshStatus() async {
-        let available = await ai.isAvailable
-        statusText = available ? "LOCAL" : "UNAVAILABLE"
+        let status = await ai.status()
+        statusText = status.badge
     }
 
     func send() {
@@ -45,16 +45,16 @@ final class ChatViewModel: ObservableObject {
         isThinking = true
 
         Task {
-            let available = await ai.isAvailable
+            let modelStatus = await ai.status()
 
-            guard available else {
+            guard modelStatus.isAvailable else {
                 append(
                     ChatMessage(
                         role: .assistant,
-                        text: "The Apple on-device model is unavailable. Make sure this iPhone supports Apple Intelligence and Apple Intelligence is enabled."
+                        text: modelStatus.message
                     )
                 )
-                statusText = "UNAVAILABLE"
+                statusText = modelStatus.badge
                 isThinking = false
                 return
             }
