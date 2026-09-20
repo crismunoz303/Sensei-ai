@@ -43,6 +43,14 @@ jobs:
             CODE_SIGN_IDENTITY="" \
             build
 
+      - name: Verify Google Sign-In runtime configuration
+        run: |
+          PLIST="build/Build/Products/Release-iphoneos/SENSEI.app/Info.plist"
+          echo "Bundle ID: $(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$PLIST")"
+          echo "GIDClientID: $(/usr/libexec/PlistBuddy -c 'Print :GIDClientID' "$PLIST")"
+          /usr/libexec/PlistBuddy -c 'Print :CFBundleURLTypes' "$PLIST"
+          /usr/libexec/PlistBuddy -c 'Print :CFBundleURLTypes:0:CFBundleURLSchemes:0' "$PLIST" | grep -Fx 'com.googleusercontent.apps.934355792148-tlle93u7lt07l9vmj9kpttdfonk3lrer'
+
       - name: Package unsigned IPA
         run: |
           rm -rf Payload
