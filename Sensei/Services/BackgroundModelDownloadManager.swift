@@ -43,7 +43,6 @@ final class BackgroundModelDownloadManager: NSObject, @unchecked Sendable {
 
     private let fileManager = FileManager.default
     private let defaults = UserDefaults.standard
-    private let vault = ModelVaultManager.shared
 
     private let delegateQueue: OperationQueue = {
         let queue = OperationQueue()
