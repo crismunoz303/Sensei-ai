@@ -1,6 +1,12 @@
 import Foundation
 import FoundationModels
 
+struct SenseiModelStatus: Sendable {
+    let isAvailable: Bool
+    let badge: String
+    let message: String
+}
+
 actor SenseiAI {
     static let shared = SenseiAI()
 
@@ -18,8 +24,46 @@ actor SenseiAI {
     - Protect the user's privacy.
     """
 
-    var isAvailable: Bool {
-        model.isAvailable
+    func status() -> SenseiModelStatus {
+        switch model.availability {
+        case .available:
+            return SenseiModelStatus(
+                isAvailable: true,
+                badge: "LOCAL",
+                message: "Apple Intelligence is ready. SENSEI is running on-device."
+            )
+
+        case .unavailable(let reason):
+            switch reason {
+            case .appleIntelligenceNotEnabled:
+                return SenseiModelStatus(
+                    isAvailable: false,
+                    badge: "AI OFF",
+                    message: "Apple Intelligence is turned off. Turn it on in Settings > Apple Intelligence & Siri, then reopen SENSEI."
+                )
+
+            case .deviceNotEligible:
+                return SenseiModelStatus(
+                    isAvailable: false,
+                    badge: "NO SUPPORT",
+                    message: "This device is not eligible for the Apple Intelligence on-device model."
+                )
+
+            case .modelNotReady:
+                return SenseiModelStatus(
+                    isAvailable: false,
+                    badge: "MODEL WAIT",
+                    message: "Apple Intelligence is enabled, but its on-device model is not ready yet. The model assets may still be downloading or temporarily unavailable. Try again after Apple Intelligence finishes preparing."
+                )
+
+            @unknown default:
+                return SenseiModelStatus(
+                    isAvailable: false,
+                    badge: "UNAVAILABLE",
+                    message: "The on-device Apple Intelligence model is unavailable for an unknown system reason."
+                )
+            }
+        }
     }
 
     func reply(to prompt: String, history: [ChatMessage]) async throws -> String {
