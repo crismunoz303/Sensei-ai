@@ -1,0 +1,22 @@
+name: Sensei
+
+options:
+  createIntermediateGroups: true
+
+targets:
+  Sensei:
+    type: application
+    platform: iOS
+    deploymentTarget: "26.0"
+    sources:
+      - path: Sensei
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: app.sensei.personal
+        PRODUCT_NAME: SENSEI
+        SWIFT_VERSION: 6.0
+        TARGETED_DEVICE_FAMILY: "1"
+        GENERATE_INFOPLIST_FILE: YES
+        INFOPLIST_KEY_CFBundleDisplayName: SENSEI
+        INFOPLIST_KEY_UILaunchScreen_Generation: YES
+        CODE_SIGN_STYLE: Automatic
