@@ -66,9 +66,17 @@ final class SenseiAI {
         }
 
         if model == .qwen35_9b {
-            let minimumRAM = UInt64(8) * 1024 * 1024 * 1024
-            guard ProcessInfo.processInfo.physicalMemory >= minimumRAM else {
-                throw SenseiAIError.insufficientMemoryFor9B
+            let physicalMemory = ProcessInfo.processInfo.physicalMemory
+
+            // iPhone RAM is marketed in decimal GB, while 8 * 1024^3 is
+            // actually 8 GiB (about 8.59 GB). Using the GiB threshold can
+            // incorrectly reject legitimate 8 GB-class iPhones.
+            let minimumEightGBClassMemory: UInt64 = 7_500_000_000
+
+            guard physicalMemory >= minimumEightGBClassMemory else {
+                throw SenseiAIError.insufficientMemoryFor9B(
+                    detectedBytes: physicalMemory
+                )
             }
         }
 
@@ -172,7 +180,7 @@ final class SenseiAI {
 enum SenseiAIError: LocalizedError {
     case noModelLoaded
     case modelNotDownloaded
-    case insufficientMemoryFor9B
+    case insufficientMemoryFor9B(detectedBytes: UInt64)
 
     var errorDescription: String? {
         switch self {
@@ -180,8 +188,12 @@ enum SenseiAIError: LocalizedError {
             "No local SENSEI model is loaded."
         case .modelNotDownloaded:
             "This SENSEI model has not finished downloading yet."
-        case .insufficientMemoryFor9B:
-            "Qwen3.5 9B requires an iPhone reporting at least 8 GB of physical RAM. Choose the strongest smaller model instead."
+        case .insufficientMemoryFor9B(let detectedBytes):
+            let detectedGB = Double(detectedBytes) / 1_000_000_000
+            return String(
+                format: "Qwen3.5 9B needs an 8 GB-class iPhone. This device reports %.1f GB of physical RAM.",
+                detectedGB
+            )
         }
     }
 }
