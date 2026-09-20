@@ -4,6 +4,9 @@ options:
   createIntermediateGroups: true
 
 packages:
+  MLXSwift:
+    url: https://github.com/ml-explore/mlx-swift
+    from: 0.31.6
   MLXSwiftLM:
     url: https://github.com/ml-explore/mlx-swift-lm
     revision: c6446cf7bfb7cea76408013b614d4b2c530eaa03
@@ -22,7 +25,13 @@ targets:
     deploymentTarget: "26.0"
     sources:
       - path: Sensei
+    entitlements:
+      path: Sensei/Sensei.entitlements
+      properties:
+        com.apple.developer.kernel.increased-memory-limit: true
     dependencies:
+      - package: MLXSwift
+        product: MLX
       - package: MLXSwiftLM
         product: MLXLLM
       - package: MLXSwiftLM
