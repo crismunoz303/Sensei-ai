@@ -1,8 +1,6 @@
 import Foundation
-import MLXHuggingFace
 import MLXLLM
 import MLXLMCommon
-import HuggingFace
 import Tokenizers
 
 // SENSEI serializes all access to ChatSession on MainActor.
@@ -58,20 +56,21 @@ final class SenseiAI {
             return 0
         }
 
+        guard let directory =
+            BackgroundModelDownloadManager.shared.readyModelDirectory(for: model)
+        else {
+            throw SenseiAIError.modelNotDownloaded
+        }
+
         sessionBox = nil
         container = nil
         loadedModel = nil
 
         let started = Date()
-        let configuration = configuration(for: model)
 
-        let loaded = try await #huggingFaceLoadModelContainer(
-            configuration: configuration,
-            progressHandler: { progress in
-                Task { @MainActor in
-                    progressHandler(progress.fractionCompleted)
-                }
-            }
+        let loaded = try await LLMModelFactory.shared.loadContainer(
+            from: directory,
+            using: TokenizersLoader()
         )
 
         let newSessionBox = SenseiSessionBox(
@@ -153,28 +152,18 @@ final class SenseiAI {
             response: response
         )
     }
-
-    private func configuration(for model: LocalModelOption) -> ModelConfiguration {
-        switch model {
-        case .qwen3_8b:
-            return LLMRegistry.qwen3_8b_4bit
-
-        case .qwen35_9b, .qwen35_4b:
-            return ModelConfiguration(
-                id: model.repositoryID,
-                extraEOSTokens: ["<|im_end|>"]
-            )
-        }
-    }
 }
 
 enum SenseiAIError: LocalizedError {
     case noModelLoaded
+    case modelNotDownloaded
 
     var errorDescription: String? {
         switch self {
         case .noModelLoaded:
-            return "No local SENSEI model is loaded."
+            "No local SENSEI model is loaded."
+        case .modelNotDownloaded:
+            "This SENSEI model has not finished downloading yet."
         }
     }
 }
