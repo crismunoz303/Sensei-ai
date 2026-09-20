@@ -3,6 +3,7 @@ import SwiftUI
 struct ContentView: View {
     @EnvironmentObject private var chat: ChatViewModel
     @FocusState private var inputFocused: Bool
+    @State private var showModelLab = false
 
     var body: some View {
         NavigationStack {
@@ -17,6 +18,11 @@ struct ContentView: View {
                 }
             }
             .toolbar(.hidden, for: .navigationBar)
+            .sheet(isPresented: $showModelLab) {
+                ModelLabView()
+                    .environmentObject(chat)
+                    .preferredColorScheme(.dark)
+            }
         }
     }
 
@@ -27,26 +33,43 @@ struct ContentView: View {
                     .font(.system(size: 24, weight: .black, design: .rounded))
                     .foregroundStyle(.white)
 
-                Text("PERSONAL AI")
-                    .font(.caption2.weight(.semibold))
-                    .tracking(2)
-                    .foregroundStyle(.secondary)
+                Button {
+                    showModelLab = true
+                } label: {
+                    HStack(spacing: 5) {
+                        Text("MODEL LAB")
+                        Image(systemName: "chevron.right")
+                    }
+                    .font(.caption2.weight(.bold))
+                    .tracking(1.5)
+                    .foregroundStyle(.red)
+                }
             }
 
             Spacer()
 
-            HStack(spacing: 6) {
-                Circle()
-                    .fill(chat.statusText == "LOCAL" ? Color.red : Color.gray)
-                    .frame(width: 7, height: 7)
+            VStack(alignment: .trailing, spacing: 5) {
+                HStack(spacing: 6) {
+                    Circle()
+                        .fill(chat.statusText == "LOCAL" ? Color.red : Color.gray)
+                        .frame(width: 7, height: 7)
 
-                Text(chat.statusText)
-                    .font(.caption2.monospaced().weight(.bold))
-                    .foregroundStyle(chat.statusText == "LOCAL" ? .red : .secondary)
+                    Text(chat.statusText)
+                        .font(.caption2.monospaced().weight(.bold))
+                        .foregroundStyle(chat.statusText == "LOCAL" ? .red : .secondary)
+                }
+
+                Text(chat.loadedModel?.name ?? chat.selectedModel.name)
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
             }
             .padding(.horizontal, 10)
             .padding(.vertical, 7)
-            .background(.white.opacity(0.06), in: Capsule())
+            .background(.white.opacity(0.06), in: RoundedRectangle(cornerRadius: 12))
+            .onTapGesture {
+                showModelLab = true
+            }
         }
         .padding(.horizontal, 18)
         .padding(.vertical, 14)
@@ -113,7 +136,7 @@ struct ContentView: View {
             .background(.white.opacity(0.07), in: RoundedRectangle(cornerRadius: 18))
 
             HStack {
-                Text("ON-DEVICE • NO API KEY")
+                Text("LOCAL MLX • NO PAID API")
                     .font(.caption2.monospaced())
                     .foregroundStyle(.secondary)
 
