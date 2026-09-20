@@ -16,9 +16,13 @@ final class ChatViewModel: ObservableObject {
     @Published var modelProgress: Double = 0
     @Published var benchmarkResult: ModelBenchmarkSnapshot?
     @Published var benchmarkError: String?
+    @Published var modelVaultReady = false
+    @Published var modelVaultName = "NOT SET"
+    @Published var modelVaultDetail = "Choose a persistent folder in Files before downloading models."
 
     private let ai = SenseiAI.shared
     private let downloads = BackgroundModelDownloadManager.shared
+    private let vault = ModelVaultManager.shared
     private let store = ConversationStore()
     private let defaults = UserDefaults.standard
     private var lastLoadSeconds: Double = 0
@@ -62,6 +66,25 @@ final class ChatViewModel: ObservableObject {
             }
         }
 
+        refreshModelVaultState()
+        refreshDownloadState()
+    }
+
+    func refreshModelVaultState() {
+        modelVaultReady = vault.isConfigured
+
+        if let name = vault.displayName, vault.isConfigured {
+            modelVaultName = name
+            modelVaultDetail = "Models stored here survive deleting and reinstalling SENSEI. After a reinstall, choose this same folder again."
+        } else {
+            modelVaultName = "NOT SET"
+            modelVaultDetail = "Choose a persistent Files or iCloud Drive folder. Do not use SENSEI's own app folder."
+        }
+    }
+
+    func configureModelVault(_ url: URL) throws {
+        try vault.remember(folder: url)
+        refreshModelVaultState()
         refreshDownloadState()
     }
 
@@ -114,6 +137,13 @@ final class ChatViewModel: ObservableObject {
 
         if downloads.isModelReady(model) {
             loadModelFromDisk(model)
+            return
+        }
+
+        guard vault.isConfigured else {
+            statusText = "VAULT NEEDED"
+            modelStatusDetail = "Choose a persistent Model Vault folder first."
+            benchmarkError = "Choose a Model Vault before downloading."
             return
         }
 
