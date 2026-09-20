@@ -10,12 +10,24 @@ import Tokenizers
 // tells Swift 6 that our serialized usage is intentional.
 extension ChatSession: @retroactive @unchecked Sendable {}
 
+private final class SenseiSessionBox: @unchecked Sendable {
+    let session: ChatSession
+
+    init(container: ModelContainer, instructions: String) {
+        self.session = ChatSession(container, instructions: instructions)
+    }
+
+    func respond(to prompt: String) async throws -> String {
+        try await session.respond(to: prompt)
+    }
+}
+
 @MainActor
 final class SenseiAI {
     static let shared = SenseiAI()
 
     private var container: ModelContainer?
-    private var session: ChatSession?
+    private var sessionBox: SenseiSessionBox?
     private var loadedModel: LocalModelOption?
 
     static let instructions = """
@@ -41,12 +53,12 @@ final class SenseiAI {
         model: LocalModelOption,
         progressHandler: @escaping @MainActor @Sendable (Double) -> Void
     ) async throws -> Double {
-        if loadedModel == model, container != nil, session != nil {
+        if loadedModel == model, container != nil, sessionBox != nil {
             await progressHandler(1.0)
             return 0
         }
 
-        session = nil
+        sessionBox = nil
         container = nil
         loadedModel = nil
 
@@ -62,13 +74,13 @@ final class SenseiAI {
             }
         )
 
-        let newSession = ChatSession(
-            loaded,
+        let newSessionBox = SenseiSessionBox(
+            container: loaded,
             instructions: Self.instructions
         )
 
         container = loaded
-        session = newSession
+        sessionBox = newSessionBox
         loadedModel = model
 
         await progressHandler(1.0)
@@ -76,21 +88,21 @@ final class SenseiAI {
     }
 
     func reply(to prompt: String) async throws -> String {
-        guard let session else {
+        guard let sessionBox else {
             throw SenseiAIError.noModelLoaded
         }
 
-        return try await session.respond(to: prompt)
+        return try await sessionBox.respond(to: prompt)
     }
 
     func resetConversation() {
         guard let container else {
-            session = nil
+            sessionBox = nil
             return
         }
 
-        session = ChatSession(
-            container,
+        sessionBox = SenseiSessionBox(
+            container: container,
             instructions: Self.instructions
         )
     }
