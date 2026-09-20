@@ -23,8 +23,8 @@ final class GoogleDriveBackupManager: ObservableObject {
         guard GIDSignIn.sharedInstance.hasPreviousSignIn() else { return }
         GIDSignIn.sharedInstance.restorePreviousSignIn { [weak self] user, error in
             guard let self else { return }
-            if let user {
-                self.apply(user)
+            if user != nil {
+                self.applyCurrentUserState()
             } else if let error {
                 self.status = "SIGN IN NEEDED"
                 self.detail = error.localizedDescription
@@ -84,6 +84,17 @@ final class GoogleDriveBackupManager: ObservableObject {
         accountEmail = user.profile?.email
         status = "CONNECTED"
         if let email = user.profile?.email {
+            detail = "Drive connected as \(email)."
+        } else {
+            detail = "Google Drive connected."
+        }
+    }
+
+    private func applyCurrentUserState() {
+        isSignedIn = true
+        accountEmail = GIDSignIn.sharedInstance.currentUser?.profile?.email
+        status = "CONNECTED"
+        if let email = accountEmail {
             detail = "Drive connected as \(email)."
         } else {
             detail = "Google Drive connected."
