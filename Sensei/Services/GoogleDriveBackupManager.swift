@@ -22,14 +22,12 @@ final class GoogleDriveBackupManager: ObservableObject {
     func restore() {
         guard GIDSignIn.sharedInstance.hasPreviousSignIn() else { return }
         GIDSignIn.sharedInstance.restorePreviousSignIn { [weak self] user, error in
-            Task { @MainActor in
-                guard let self else { return }
-                if let user {
-                    self.apply(user)
-                } else if let error {
-                    self.status = "SIGN IN NEEDED"
-                    self.detail = error.localizedDescription
-                }
+            guard let self else { return }
+            if let user {
+                self.apply(user)
+            } else if let error {
+                self.status = "SIGN IN NEEDED"
+                self.detail = error.localizedDescription
             }
         }
     }
@@ -63,8 +61,7 @@ final class GoogleDriveBackupManager: ObservableObject {
         status = "BACKING UP"
         detail = "Uploading \(model.name) to Google Drive…"
 
-        let refreshed = try await refresh(user)
-        let token = refreshed.accessToken.tokenString
+        let token = try await refreshedAccessToken(for: user)
         let folderID = try await ensureFolder(accessToken: token)
         let files = try FileManager.default.subpathsOfDirectory(atPath: directory.path)
             .map { directory.appendingPathComponent($0) }
@@ -93,11 +90,14 @@ final class GoogleDriveBackupManager: ObservableObject {
         }
     }
 
-    private func refresh(_ user: GIDGoogleUser) async throws -> GIDGoogleUser {
+    private func refreshedAccessToken(for user: GIDGoogleUser) async throws -> String {
         try await withCheckedThrowingContinuation { continuation in
             user.refreshTokensIfNeeded { refreshed, error in
-                if let refreshed { continuation.resume(returning: refreshed) }
-                else { continuation.resume(throwing: error ?? DriveBackupError.tokenRefreshFailed) }
+                if let refreshed {
+                    continuation.resume(returning: refreshed.accessToken.tokenString)
+                } else {
+                    continuation.resume(throwing: error ?? DriveBackupError.tokenRefreshFailed)
+                }
             }
         }
     }
