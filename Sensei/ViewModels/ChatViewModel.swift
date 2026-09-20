@@ -16,13 +16,9 @@ final class ChatViewModel: ObservableObject {
     @Published var modelProgress: Double = 0
     @Published var benchmarkResult: ModelBenchmarkSnapshot?
     @Published var benchmarkError: String?
-    @Published var modelVaultReady = false
-    @Published var modelVaultName = "NOT SET"
-    @Published var modelVaultDetail = "Choose a persistent folder in Files before downloading models."
 
     private let ai = SenseiAI.shared
     private let downloads = BackgroundModelDownloadManager.shared
-    private let vault = ModelVaultManager.shared
     private let store = ConversationStore()
     private let defaults = UserDefaults.standard
     private var lastLoadSeconds: Double = 0
@@ -66,7 +62,6 @@ final class ChatViewModel: ObservableObject {
             }
         }
 
-        refreshModelVaultState()
         refreshDownloadState()
     }
 
