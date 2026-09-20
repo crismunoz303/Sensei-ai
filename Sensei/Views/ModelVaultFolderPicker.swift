@@ -10,22 +10,41 @@ struct ModelVaultFolderPicker: UIViewControllerRepresentable {
         Coordinator(onPick: onPick, onCancel: onCancel)
     }
 
-    func makeUIViewController(context: Context) -> UIDocumentPickerViewController {
-        let picker = UIDocumentPickerViewController(
-            forOpeningContentTypes: [.folder],
-            asCopy: false
-        )
-        picker.delegate = context.coordinator
-        picker.allowsMultipleSelection = false
-        picker.modalPresentationStyle = .fullScreen
-        return picker
+    func makeUIViewController(context: Context) -> PickerHostViewController {
+        let host = PickerHostViewController()
+        host.coordinator = context.coordinator
+        return host
     }
 
     func updateUIViewController(
-        _ uiViewController: UIDocumentPickerViewController,
+        _ uiViewController: PickerHostViewController,
         context: Context
-    ) {}
+    ) {
+        uiViewController.coordinator = context.coordinator
+    }
 
+    @MainActor
+    final class PickerHostViewController: UIViewController {
+        weak var coordinator: Coordinator?
+        private var hasPresentedPicker = false
+
+        override func viewDidAppear(_ animated: Bool) {
+            super.viewDidAppear(animated)
+
+            guard !hasPresentedPicker else { return }
+            hasPresentedPicker = true
+
+            let picker = UIDocumentPickerViewController(
+                forOpeningContentTypes: [.folder]
+            )
+            picker.delegate = coordinator
+            picker.allowsMultipleSelection = false
+            picker.modalPresentationStyle = .fullScreen
+            present(picker, animated: true)
+        }
+    }
+
+    @MainActor
     final class Coordinator: NSObject, UIDocumentPickerDelegate {
         let onPick: @MainActor (URL) -> Void
         let onCancel: @MainActor () -> Void
@@ -43,21 +62,17 @@ struct ModelVaultFolderPicker: UIViewControllerRepresentable {
             didPickDocumentsAt urls: [URL]
         ) {
             guard let url = urls.first else {
-                Task { @MainActor in
-                    onCancel()
-                }
+                onCancel()
                 return
             }
 
-            Task { @MainActor in
-                onPick(url)
-            }
+            onPick(url)
         }
 
-        func documentPickerWasCancelled(_ controller: UIDocumentPickerViewController) {
-            Task { @MainActor in
-                onCancel()
-            }
+        func documentPickerWasCancelled(
+            _ controller: UIDocumentPickerViewController
+        ) {
+            onCancel()
         }
     }
 }
