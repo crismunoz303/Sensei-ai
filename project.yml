@@ -17,6 +17,9 @@ packages:
   Transformers:
     url: https://github.com/huggingface/swift-transformers
     from: 1.3.0
+  GoogleSignIn:
+    url: https://github.com/google/GoogleSignIn-iOS
+    from: 10.0.0
 
 targets:
   Sensei:
@@ -42,6 +45,8 @@ targets:
         product: HuggingFace
       - package: Transformers
         product: Tokenizers
+      - package: GoogleSignIn
+        product: GoogleSignIn
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: app.sensei.personal
@@ -51,4 +56,6 @@ targets:
         GENERATE_INFOPLIST_FILE: YES
         INFOPLIST_KEY_CFBundleDisplayName: SENSEI
         INFOPLIST_KEY_UILaunchScreen_Generation: YES
+        INFOPLIST_KEY_GIDClientID: 934355792148-tlle93u7lt07l9vmj9kpttdfonk3lrer.apps.googleusercontent.com
+        INFOPLIST_KEY_CFBundleURLTypes_0_CFBundleURLSchemes_0: com.googleusercontent.apps.934355792148-tlle93u7lt07l9vmj9kpttdfonk3lrer
         CODE_SIGN_STYLE: Automatic
