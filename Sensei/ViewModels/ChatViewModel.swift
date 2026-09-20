@@ -9,16 +9,20 @@ final class ChatViewModel: ObservableObject {
     @Published var selectedModel: LocalModelOption
     @Published var loadedModel: LocalModelOption?
     @Published var statusText = "NO MODEL"
-    @Published var modelStatusDetail = "Open Model Lab and load a local model."
+    @Published var modelStatusDetail = "Open Model Lab and download a local model."
     @Published var isLoadingModel = false
+    @Published var isDownloadingModel = false
+    @Published var modelDownloadReady = false
     @Published var modelProgress: Double = 0
     @Published var benchmarkResult: ModelBenchmarkSnapshot?
     @Published var benchmarkError: String?
 
     private let ai = SenseiAI.shared
+    private let downloads = BackgroundModelDownloadManager.shared
     private let store = ConversationStore()
     private let defaults = UserDefaults.standard
     private var lastLoadSeconds: Double = 0
+    private var downloadObserver: NSObjectProtocol?
 
     init() {
         if let raw = UserDefaults.standard.string(forKey: "sensei.selectedModel"),
@@ -33,34 +37,112 @@ final class ChatViewModel: ObservableObject {
             messages = [
                 ChatMessage(
                     role: .assistant,
-                    text: "SENSEI is ready for its independent local model. Open MODEL LAB, choose a model, and load it once. After download, the AI runs locally on this iPhone."
+                    text: "SENSEI is ready for its independent local model. Open MODEL LAB and download the model you want. The download can continue while SENSEI is suspended or the phone is locked."
                 )
             ]
         } else {
             messages = saved
         }
+
+        downloadObserver = NotificationCenter.default.addObserver(
+            forName: .senseiModelDownloadDidUpdate,
+            object: nil,
+            queue: .main
+        ) { [weak self] notification in
+            guard
+                let raw = notification.userInfo?["model"] as? String,
+                let model = LocalModelOption(rawValue: raw)
+            else {
+                return
+            }
+
+            Task { @MainActor [weak self] in
+                guard self?.selectedModel == model else { return }
+                self?.refreshDownloadState()
+            }
+        }
+
+        refreshDownloadState()
     }
 
     func selectModel(_ model: LocalModelOption) {
         selectedModel = model
         defaults.set(model.rawValue, forKey: "sensei.selectedModel")
+        benchmarkResult = nil
+        benchmarkError = nil
+        refreshDownloadState()
+    }
 
-        if loadedModel != model {
-            statusText = "NO MODEL"
-            modelStatusDetail = "\(model.name) selected. Load it to use SENSEI."
+    func refreshDownloadState() {
+        let model = selectedModel
+
+        Task {
+            let snapshot = await downloads.snapshot(for: model)
+
+            guard selectedModel == model else { return }
+
+            modelProgress = snapshot.progress
+            isDownloadingModel = snapshot.isDownloading
+            modelDownloadReady = snapshot.isReady
+
+            if loadedModel == model {
+                statusText = "LOCAL"
+                modelStatusDetail = "\(model.name) is loaded locally."
+                return
+            }
+
+            if snapshot.isReady {
+                statusText = "READY"
+                modelStatusDetail = "\(model.name) finished downloading. Tap LOAD LOCAL MODEL."
+            } else if snapshot.isDownloading {
+                statusText = "DOWNLOADING"
+                modelStatusDetail = "Downloading \(model.name) in the background. You can leave SENSEI or lock the phone."
+            } else if let error = snapshot.errorMessage {
+                statusText = "PAUSED"
+                modelStatusDetail = "\(error) Tap DOWNLOAD MODEL to resume."
+            } else {
+                statusText = "NO MODEL"
+                modelStatusDetail = "\(model.name) is not downloaded yet."
+            }
         }
     }
 
     func loadSelectedModel() {
         guard !isLoadingModel else { return }
 
-        isLoadingModel = true
-        modelProgress = 0
-        statusText = "LOADING"
-        modelStatusDetail = "Downloading or loading \(selectedModel.name)…"
+        let model = selectedModel
+
+        if downloads.isModelReady(model) {
+            loadModelFromDisk(model)
+            return
+        }
+
+        isDownloadingModel = true
+        modelDownloadReady = false
+        statusText = "DOWNLOADING"
+        modelStatusDetail = "Preparing \(model.name) for background download…"
         benchmarkError = nil
 
-        let model = selectedModel
+        Task {
+            do {
+                try await downloads.startDownload(for: model)
+                refreshDownloadState()
+            } catch {
+                isDownloadingModel = false
+                statusText = "ERROR"
+                modelStatusDetail = error.localizedDescription
+                benchmarkError = error.localizedDescription
+            }
+        }
+    }
+
+    private func loadModelFromDisk(_ model: LocalModelOption) {
+        isLoadingModel = true
+        isDownloadingModel = false
+        modelProgress = 1
+        statusText = "LOADING"
+        modelStatusDetail = "Loading \(model.name) into memory…"
+        benchmarkError = nil
 
         Task {
             do {
@@ -73,16 +155,17 @@ final class ChatViewModel: ObservableObject {
 
                 lastLoadSeconds = loadSeconds
                 loadedModel = model
+                modelDownloadReady = true
                 statusText = "LOCAL"
                 modelStatusDetail = "\(model.name) is loaded locally."
-                isLoadingModel = false
             } catch {
                 loadedModel = nil
                 statusText = "ERROR"
                 modelStatusDetail = error.localizedDescription
                 benchmarkError = error.localizedDescription
-                isLoadingModel = false
             }
+
+            isLoadingModel = false
         }
     }
 
@@ -115,7 +198,7 @@ final class ChatViewModel: ObservableObject {
             append(
                 ChatMessage(
                     role: .assistant,
-                    text: "No independent local model is loaded yet. Open MODEL LAB at the top, choose a model, and tap LOAD MODEL."
+                    text: "No independent local model is loaded yet. Open MODEL LAB, download one, then load it locally."
                 )
             )
             return
@@ -148,9 +231,7 @@ final class ChatViewModel: ObservableObject {
         messages.removeAll()
         store.clear()
 
-        Task {
-            await ai.resetConversation()
-        }
+        ai.resetConversation()
 
         append(
             ChatMessage(
