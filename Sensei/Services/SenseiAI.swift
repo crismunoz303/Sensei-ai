@@ -68,13 +68,19 @@ final class SenseiAI {
         if model == .qwen35_9b {
             let physicalMemory = ProcessInfo.processInfo.physicalMemory
 
-            // iPhone RAM is marketed in decimal GB, while 8 * 1024^3 is
-            // actually 8 GiB (about 8.59 GB). Using the GiB threshold can
-            // incorrectly reject legitimate 8 GB-class iPhones.
-            let minimumEightGBClassMemory: UInt64 = 7_500_000_000
+            // Qwen3.5 9B 4-bit is ~6 GB on disk. On an 8 GB-class iPhone,
+            // loading it through MLX crosses iOS's per-process memory budget
+            // before Swift can receive a recoverable allocation error; iOS
+            // terminates the process (jetsam). This exact failure was
+            // reproduced on the iPhone 16 Pro.
+            //
+            // Do not attempt the known-crashing path on 8 GB-class devices.
+            // Keep the downloaded model on disk so it can still be used on a
+            // future device with a larger memory budget.
+            let minimumMemoryFor9BAttempt: UInt64 = 10_000_000_000
 
-            guard physicalMemory >= minimumEightGBClassMemory else {
-                throw SenseiAIError.insufficientMemoryFor9B(
+            guard physicalMemory >= minimumMemoryFor9BAttempt else {
+                throw SenseiAIError.nineBUnsafeOnThisDevice(
                     detectedBytes: physicalMemory
                 )
             }
@@ -180,7 +186,7 @@ final class SenseiAI {
 enum SenseiAIError: LocalizedError {
     case noModelLoaded
     case modelNotDownloaded
-    case insufficientMemoryFor9B(detectedBytes: UInt64)
+    case nineBUnsafeOnThisDevice(detectedBytes: UInt64)
 
     var errorDescription: String? {
         switch self {
@@ -188,10 +194,10 @@ enum SenseiAIError: LocalizedError {
             return "No local SENSEI model is loaded."
         case .modelNotDownloaded:
             return "This SENSEI model has not finished downloading yet."
-        case .insufficientMemoryFor9B(let detectedBytes):
+        case .nineBUnsafeOnThisDevice(let detectedBytes):
             let detectedGB = Double(detectedBytes) / 1_000_000_000
             return String(
-                format: "Qwen3.5 9B needs an 8 GB-class iPhone. This device reports %.1f GB of physical RAM.",
+                format: "Qwen3.5 9B is too large to load safely on this %.1f GB iPhone and can cause iOS to terminate SENSEI. The downloaded 9B files have been kept. Use Qwen3 8B for the strongest supported local option on this device.",
                 detectedGB
             )
         }
