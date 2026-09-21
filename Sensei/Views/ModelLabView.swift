@@ -332,12 +332,7 @@ struct ModelLabView: View {
                 .foregroundStyle(.white)
                 .background(.white.opacity(0.09), in: RoundedRectangle(cornerRadius: 14))
             }
-            .disabled(
-                chat.loadedModel != chat.selectedModel
-                || chat.isLoadingModel
-                || chat.isDownloadingModel
-                || chat.isThinking
-            )
+            .disabled(chat.isLoadingModel || chat.isDownloadingModel)
 
             if let result = chat.benchmarkResult {
                 Divider().overlay(.white.opacity(0.1))
