@@ -110,7 +110,12 @@ final class ChatViewModel: ObservableObject {
             refreshDownloadState()
             return
         }
-        loadModelFromDisk(model)
+        SenseiDiagnostics.shared.record(
+            model: model.name,
+            stage: "AUTO_RESTORE_STARTED",
+            message: "Selected model files are ready; automatic in-memory restore started."
+        )
+        loadModelFromDisk(model, isAutomaticRestore: true)
     }
 
     func selectModel(_ model: LocalModelOption) {
@@ -203,7 +208,7 @@ final class ChatViewModel: ObservableObject {
         }
     }
 
-    private func loadModelFromDisk(_ model: LocalModelOption) {
+    private func loadModelFromDisk(_ model: LocalModelOption, isAutomaticRestore: Bool = false) {
         isLoadingModel = true
         isDownloadingModel = false
         modelProgress = 1
@@ -232,6 +237,15 @@ final class ChatViewModel: ObservableObject {
                 )
                 statusText = "LOCAL"
                 modelStatusDetail = "\(model.name) is loaded locally."
+                if isAutomaticRestore {
+                    SenseiDiagnostics.shared.record(
+                        operationID: operationID,
+                        model: model.name,
+                        stage: "AUTO_RESTORE_COMPLETE",
+                        message: "Selected model was restored into memory automatically.",
+                        level: "SUCCESS"
+                    )
+                }
             } catch {
                 SenseiDiagnostics.shared.failModelLoad(
                     operationID: operationID,
@@ -242,6 +256,15 @@ final class ChatViewModel: ObservableObject {
                 statusText = "ERROR"
                 modelStatusDetail = error.localizedDescription
                 benchmarkError = error.localizedDescription
+                if isAutomaticRestore {
+                    SenseiDiagnostics.shared.record(
+                        operationID: operationID,
+                        model: model.name,
+                        stage: "AUTO_RESTORE_ERROR",
+                        message: error.localizedDescription,
+                        level: "ERROR"
+                    )
+                }
             }
 
             isLoadingModel = false
