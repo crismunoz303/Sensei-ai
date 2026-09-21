@@ -18,6 +18,7 @@ final class ChatViewModel: ObservableObject {
     @Published var downloadETA: String?
     @Published var benchmarkResult: ModelBenchmarkSnapshot?
     @Published var benchmarkError: String?
+    @Published var isRunningBenchmark = false
 
     private let ai = SenseiAI.shared
     private let downloads = BackgroundModelDownloadManager.shared
@@ -96,6 +97,12 @@ final class ChatViewModel: ObservableObject {
         }
 
         refreshDownloadState()
+
+        // A downloaded model survives app restarts, but an MLX model in RAM does not.
+        // Restore the selected model automatically whenever its files are complete.
+        if downloads.isModelReady(selectedModel) {
+            loadModelFromDisk(selectedModel)
+        }
     }
 
     func selectModel(_ model: LocalModelOption) {
@@ -247,11 +254,11 @@ final class ChatViewModel: ObservableObject {
             return
         }
 
-        isThinking = true
+        isRunningBenchmark = true
         benchmarkError = nil
         benchmarkResult = nil
 
-        generationTask = Task {
+        Task {
             let operationID = UUID().uuidString
             SenseiDiagnostics.shared.record(
                 operationID: operationID,
@@ -261,7 +268,7 @@ final class ChatViewModel: ObservableObject {
             )
             let stallWatch = Task { @MainActor in
                 try? await Task.sleep(for: .seconds(20))
-                guard !Task.isCancelled, self.isThinking else { return }
+                guard !Task.isCancelled, self.isRunningBenchmark else { return }
                 SenseiDiagnostics.shared.record(
                     operationID: operationID,
                     model: self.loadedModel?.name,
@@ -291,7 +298,7 @@ final class ChatViewModel: ObservableObject {
                 )
             }
 
-            isThinking = false
+            isRunningBenchmark = false
         }
     }
 
@@ -305,34 +312,45 @@ final class ChatViewModel: ObservableObject {
         return minutes > 0 ? "~\(hours)h \(minutes)m remaining" : "~\(hours)h remaining"
     }
 
-    private static func compactStreamDisplay(_ raw: String) -> String {
-        // Qwen may stream raw reasoning inside <think>...</think>. Never expose
-        // that content. The UI owns the progress indicator.
+    private static func liveAnswerText(_ raw: String) -> String? {
         if let close = raw.range(of: "</think>", options: .caseInsensitive) {
-            let answer = raw[close.upperBound...]
-                .trimmingCharacters(in: .whitespacesAndNewlines)
-            return answer.isEmpty ? "Thinking…" : answer
+            let answer = raw[close.upperBound...].trimmingCharacters(in: .whitespacesAndNewlines)
+            return answer.isEmpty ? nil : String(answer)
         }
 
-        // If an opening think tag exists without its closing tag, generation
-        // is still inside private reasoning.
+        // While an explicit thinking block is open, never expose its contents.
         if raw.range(of: "<think>", options: .caseInsensitive) != nil {
-            return "Thinking…"
+            return nil
         }
 
-        // Some model/template combinations omit the opening tag but still end
-        // private reasoning with </think>. Until a final answer is clearly
-        // available, keep all streamed preamble private.
         let answerMarkers = ["Answer:", "Final Answer:", "Final:"]
         for marker in answerMarkers {
             if let range = raw.range(of: marker, options: .caseInsensitive) {
-                let answer = raw[range.upperBound...]
-                    .trimmingCharacters(in: .whitespacesAndNewlines)
-                return answer.isEmpty ? "Thinking…" : answer
+                let answer = raw[range.upperBound...].trimmingCharacters(in: .whitespacesAndNewlines)
+                return answer.isEmpty ? nil : String(answer)
             }
         }
 
-        return "Thinking…"
+        // No reliable boundary yet. Keep the stream private until completion.
+        return nil
+    }
+
+    private static func completedAnswerText(_ raw: String) -> String {
+        if let close = raw.range(of: "</think>", options: .caseInsensitive) {
+            let answer = raw[close.upperBound...].trimmingCharacters(in: .whitespacesAndNewlines)
+            if !answer.isEmpty { return String(answer) }
+        }
+
+        for marker in ["Answer:", "Final Answer:", "Final:"] {
+            if let range = raw.range(of: marker, options: .caseInsensitive) {
+                let answer = raw[range.upperBound...].trimmingCharacters(in: .whitespacesAndNewlines)
+                if !answer.isEmpty { return String(answer) }
+            }
+        }
+
+        // Critical fallback: models/templates do not always emit think delimiters.
+        // Once generation has completed, a delimiter-free response is the answer.
+        return raw.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
     func send() {
@@ -354,18 +372,11 @@ final class ChatViewModel: ObservableObject {
         isThinking = true
         thinkingStatus = "Understanding your request…"
 
-        // Create the assistant bubble immediately and mutate it as MLX streams
-        // chunks. The user sees output as soon as the first token arrives.
+        // Progress is rendered separately. Do not create a fake "Thinking…" chat
+        // message; the assistant bubble appears only when a real answer is available.
         let responseID = UUID()
         let responseCreatedAt = Date()
-        messages.append(
-            ChatMessage(
-                id: responseID,
-                role: .assistant,
-                text: "",
-                createdAt: responseCreatedAt
-            )
-        )
+        var responseInserted = false
 
         generationTask = Task {
             let operationID = UUID().uuidString
@@ -402,14 +413,21 @@ final class ChatViewModel: ObservableObject {
                         self.thinkingStatus = "Writing response…"
                     }
 
-                    let visibleText = Self.compactStreamDisplay(streamedText)
-                    if let index = self.messages.firstIndex(where: { $0.id == responseID }) {
-                        self.messages[index] = ChatMessage(
-                            id: responseID,
-                            role: .assistant,
-                            text: visibleText,
-                            createdAt: responseCreatedAt
-                        )
+                    if let visibleText = Self.liveAnswerText(streamedText) {
+                        self.thinkingStatus = "Writing response…"
+                        if let index = self.messages.firstIndex(where: { $0.id == responseID }) {
+                            self.messages[index] = ChatMessage(
+                                id: responseID,
+                                role: .assistant,
+                                text: visibleText,
+                                createdAt: responseCreatedAt
+                            )
+                        } else {
+                            self.messages.append(
+                                ChatMessage(id: responseID, role: .assistant, text: visibleText, createdAt: responseCreatedAt)
+                            )
+                            responseInserted = true
+                        }
                     }
 
                     if !receivedFirstChunk {
@@ -425,14 +443,22 @@ final class ChatViewModel: ObservableObject {
                 }
 
                 try Task.checkCancellation()
-                let finalVisibleText = Self.compactStreamDisplay(streamedText)
+                let finalVisibleText = Self.completedAnswerText(streamedText)
+                let completedText = finalVisibleText.isEmpty
+                    ? "SENSEI completed generation but returned no answer."
+                    : finalVisibleText
                 if let index = messages.firstIndex(where: { $0.id == responseID }) {
                     messages[index] = ChatMessage(
                         id: responseID,
                         role: .assistant,
-                        text: finalVisibleText,
+                        text: completedText,
                         createdAt: responseCreatedAt
                     )
+                } else {
+                    messages.append(
+                        ChatMessage(id: responseID, role: .assistant, text: completedText, createdAt: responseCreatedAt)
+                    )
+                    responseInserted = true
                 }
                 store.save(messages)
                 SenseiDiagnostics.shared.record(
@@ -444,22 +470,22 @@ final class ChatViewModel: ObservableObject {
                 )
                 statusText = "LOCAL"
             } catch is CancellationError {
-                // Preserve whatever text was already streamed when STOP was used.
-                if streamedText.isEmpty {
-                    messages.removeAll { $0.id == responseID }
-                } else {
+                // Preserve only a real answer bubble; private reasoning is discarded.
+                if responseInserted {
                     store.save(messages)
                 }
             } catch {
-                if streamedText.isEmpty {
-                    if let index = messages.firstIndex(where: { $0.id == responseID }) {
-                        messages[index] = ChatMessage(
-                            id: responseID,
-                            role: .assistant,
-                            text: "Local model error: \(error.localizedDescription)",
-                            createdAt: responseCreatedAt
-                        )
-                    }
+                if let index = messages.firstIndex(where: { $0.id == responseID }) {
+                    messages[index] = ChatMessage(
+                        id: responseID,
+                        role: .assistant,
+                        text: "Local model error: \(error.localizedDescription)",
+                        createdAt: responseCreatedAt
+                    )
+                } else {
+                    messages.append(
+                        ChatMessage(id: responseID, role: .assistant, text: "Local model error: \(error.localizedDescription)", createdAt: responseCreatedAt)
+                    )
                 }
                 store.save(messages)
                 SenseiDiagnostics.shared.record(
