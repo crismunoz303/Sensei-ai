@@ -11,7 +11,32 @@ final class ConversationStore {
         else {
             return []
         }
-        return messages
+        let sanitized = messages.map(Self.sanitized)
+        if sanitized != messages {
+            save(sanitized)
+        }
+        return sanitized
+    }
+
+    private static func sanitized(_ message: ChatMessage) -> ChatMessage {
+        guard message.role == .assistant else { return message }
+
+        var text = message.text
+        if let close = text.range(of: "</think>", options: .caseInsensitive) {
+            text = String(text[close.upperBound...]).trimmingCharacters(in: .whitespacesAndNewlines)
+        } else if let open = text.range(of: "<think>", options: .caseInsensitive) {
+            text = String(text[..<open.lowerBound]).trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+
+        for marker in ["Answer:", "Final Answer:", "Final:"] {
+            if let range = text.range(of: marker, options: .caseInsensitive) {
+                let candidate = text[range.upperBound...].trimmingCharacters(in: .whitespacesAndNewlines)
+                if !candidate.isEmpty { text = String(candidate) }
+                break
+            }
+        }
+
+        return ChatMessage(id: message.id, role: message.role, text: text, createdAt: message.createdAt)
     }
 
     func save(_ messages: [ChatMessage]) {
