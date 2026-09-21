@@ -120,6 +120,49 @@ struct ContentView: View {
 
     private var composer: some View {
         VStack(spacing: 10) {
+            HStack(spacing: 8) {
+                Button {
+                    chat.collaborationMode = false
+                } label: {
+                    Text("FAST")
+                        .font(.caption2.monospaced().weight(.bold))
+                        .foregroundStyle(chat.collaborationMode ? .secondary : .white)
+                        .padding(.horizontal, 11)
+                        .padding(.vertical, 7)
+                        .background(chat.collaborationMode ? Color.white.opacity(0.06) : Color.red.opacity(0.8), in: Capsule())
+                }
+
+                Button {
+                    if chat.collaborationAvailable {
+                        chat.collaborationMode = true
+                    }
+                } label: {
+                    HStack(spacing: 5) {
+                        Image(systemName: "person.2.fill")
+                        Text("TEAM")
+                    }
+                    .font(.caption2.monospaced().weight(.bold))
+                    .foregroundStyle(chat.collaborationMode ? .white : (chat.collaborationAvailable ? .red : .secondary))
+                    .padding(.horizontal, 11)
+                    .padding(.vertical, 7)
+                    .background(chat.collaborationMode ? Color.red.opacity(0.8) : Color.white.opacity(0.06), in: Capsule())
+                }
+                .disabled(!chat.collaborationAvailable)
+
+                if chat.collaborationMode {
+                    Text("\(chat.downloadedModels.count) LOCAL AIs")
+                        .font(.caption2.monospaced())
+                        .foregroundStyle(.secondary)
+                } else if !chat.collaborationAvailable {
+                    Text("TEAM unlocks with 2+ downloaded models")
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                }
+
+                Spacer()
+            }
+
             HStack(spacing: 10) {
                 TextField("Ask SENSEI…", text: $chat.draft, axis: .vertical)
                     .lineLimit(1...5)
