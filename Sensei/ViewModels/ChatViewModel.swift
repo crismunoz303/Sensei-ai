@@ -249,6 +249,7 @@ final class ChatViewModel: ObservableObject {
     }
 
     func runBenchmark() {
+        guard !isRunningBenchmark else { return }
         guard loadedModel == selectedModel else {
             benchmarkError = "The selected model is not loaded. Load it first."
             return
@@ -258,7 +259,7 @@ final class ChatViewModel: ObservableObject {
             return
         }
         guard !isThinking else {
-            benchmarkError = "A chat generation is still running. Check Errors / Diagnostics for its last checkpoint."
+            benchmarkError = "A chat response is still generating. Stop it or wait for it to finish before running the test."
             return
         }
 
