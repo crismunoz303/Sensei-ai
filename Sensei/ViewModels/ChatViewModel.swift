@@ -411,6 +411,19 @@ final class ChatViewModel: ObservableObject {
 
         draft = ""
         append(ChatMessage(role: .user, text: prompt))
+
+        if let teaching = SenseiMemoryStore.shared.explicitTeaching(from: prompt),
+           let memory = SenseiMemoryStore.shared.remember(teaching.text, kind: teaching.kind) {
+            SenseiDiagnostics.shared.record(
+                model: loadedModel?.name,
+                stage: "MEMORY_SAVED",
+                message: "User explicitly saved a \(memory.kind.rawValue) memory.",
+                level: "SUCCESS"
+            )
+            append(ChatMessage(role: .assistant, text: "Remembered. I’ll keep that in SENSEI’s local memory across conversations."))
+            return
+        }
+
         isThinking = true
         thinkingStatus = "Starting local generation…"
 
