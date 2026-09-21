@@ -344,22 +344,32 @@ final class ChatViewModel: ObservableObject {
         return nil
     }
 
-    private static func completedAnswerText(_ raw: String) -> String {
+    private static func completedAnswerText(_ raw: String) -> String? {
         if let close = raw.range(of: "</think>", options: .caseInsensitive) {
             let answer = raw[close.upperBound...].trimmingCharacters(in: .whitespacesAndNewlines)
             if !answer.isEmpty { return String(answer) }
         }
 
-        for marker in ["Answer:", "Final Answer:", "Final:"] {
+        // Prefer the explicit final-answer markers before the generic one.
+        for marker in ["Final Answer:", "Final:", "Answer:"] {
             if let range = raw.range(of: marker, options: .caseInsensitive) {
                 let answer = raw[range.upperBound...].trimmingCharacters(in: .whitespacesAndNewlines)
                 if !answer.isEmpty { return String(answer) }
             }
         }
 
-        // Critical fallback: models/templates do not always emit think delimiters.
-        // Once generation has completed, a delimiter-free response is the answer.
-        return raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return "" }
+
+        // This exact prefix has already been observed in leaked Qwen output.
+        // Never turn a known reasoning transcript into a visible assistant answer.
+        if trimmed.lowercased().hasPrefix("thinking process:") {
+            return nil
+        }
+
+        // With Qwen thinking disabled at the chat template, a normal delimiter-free
+        // completion is the final answer.
+        return trimmed
     }
 
     func send() {
@@ -443,9 +453,30 @@ final class ChatViewModel: ObservableObject {
 
                 try Task.checkCancellation()
                 let finalVisibleText = Self.completedAnswerText(streamedText)
-                let completedText = finalVisibleText.isEmpty
-                    ? "SENSEI completed generation but returned no answer."
-                    : finalVisibleText
+                let completedText: String
+                if let finalVisibleText {
+                    if finalVisibleText.isEmpty {
+                        completedText = "SENSEI completed generation but returned no answer."
+                        SenseiDiagnostics.shared.record(
+                            operationID: operationID,
+                            model: loadedModel?.name,
+                            stage: "EMPTY_FINAL_ANSWER",
+                            message: "Generation completed without a visible final answer.",
+                            level: "WARNING"
+                        )
+                    } else {
+                        completedText = finalVisibleText
+                    }
+                } else {
+                    completedText = "SENSEI blocked an internal reasoning transcript. Please retry."
+                    SenseiDiagnostics.shared.record(
+                        operationID: operationID,
+                        model: loadedModel?.name,
+                        stage: "REASONING_OUTPUT_BLOCKED",
+                        message: streamedText,
+                        level: "ERROR"
+                    )
+                }
                 if let index = messages.firstIndex(where: { $0.id == responseID }) {
                     messages[index] = ChatMessage(
                         id: responseID,
