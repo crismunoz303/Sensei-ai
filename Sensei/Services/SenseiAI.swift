@@ -65,6 +65,12 @@ final class SenseiAI {
             throw SenseiAIError.modelNotDownloaded
         }
 
+        // Apply the low-cache policy before any Qwen3.5 runtime preparation.
+        // The first 9B load may read and rewrite bounded safetensor batches, so
+        // keeping MLX's reusable cache small matters during that stage too.
+        MLX.Memory.clearCache()
+        MLX.Memory.cacheLimit = 20 * 1024 * 1024
+
         let loadDirectory: URL
         if model == .qwen35_9b {
             // The downloaded Qwen3.5 9B archive is a unified vision-language
@@ -81,11 +87,6 @@ final class SenseiAI {
         sessionBox = nil
         container = nil
         loadedModel = nil
-
-        // MLX's iOS guidance recommends aggressively limiting its reusable
-        // buffer cache for multi-gigabyte LLMs to reduce jetsam pressure.
-        MLX.Memory.clearCache()
-        MLX.Memory.cacheLimit = 20 * 1024 * 1024
 
         let started = Date()
 
