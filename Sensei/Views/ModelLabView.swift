@@ -332,7 +332,16 @@ struct ModelLabView: View {
                 .foregroundStyle(.white)
                 .background(.white.opacity(0.09), in: RoundedRectangle(cornerRadius: 14))
             }
-            .disabled(chat.isLoadingModel || chat.isDownloadingModel)
+            .disabled(chat.isLoadingModel || chat.isDownloadingModel || chat.isThinking || chat.isRunningBenchmark)
+
+            if chat.isRunningBenchmark {
+                HStack(spacing: 8) {
+                    ProgressView().tint(.red)
+                    Text("RUNNING ON-DEVICE TEST…")
+                        .font(.caption2.monospaced().weight(.bold))
+                        .foregroundStyle(.secondary)
+                }
+            }
 
             if let result = chat.benchmarkResult {
                 Divider().overlay(.white.opacity(0.1))
