@@ -343,7 +343,20 @@ final class ChatViewModel: ObservableObject {
             }
             defer { stallWatch.cancel() }
             do {
-                let answer = try await ai.reply(to: prompt)
+                var receivedFirstChunk = false
+                let answer = try await ai.reply(to: prompt) { chunk in
+                    guard !chunk.isEmpty else { return }
+                    if !receivedFirstChunk {
+                        receivedFirstChunk = true
+                        SenseiDiagnostics.shared.record(
+                            operationID: operationID,
+                            model: self.loadedModel?.name,
+                            stage: "GENERATION_FIRST_CHUNK",
+                            message: "Chat streaming returned its first text chunk.",
+                            level: "SUCCESS"
+                        )
+                    }
+                }
                 try Task.checkCancellation()
                 SenseiDiagnostics.shared.record(
                     operationID: operationID,
