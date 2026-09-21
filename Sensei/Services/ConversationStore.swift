@@ -11,32 +11,60 @@ final class ConversationStore {
         else {
             return []
         }
-        let sanitized = messages.map(Self.sanitized)
+
+        // Persisted assistant output from older builds may contain Qwen reasoning.
+        // Only remove output when there is objective evidence that it is a reasoning
+        // transcript. Normal assistant answers and every user message are preserved.
+        let sanitized = messages.compactMap(Self.sanitized)
         if sanitized != messages {
             save(sanitized)
         }
         return sanitized
     }
 
-    private static func sanitized(_ message: ChatMessage) -> ChatMessage {
+    private static func sanitized(_ message: ChatMessage) -> ChatMessage? {
         guard message.role == .assistant else { return message }
 
-        var text = message.text
+        var text = message.text.trimmingCharacters(in: .whitespacesAndNewlines)
+
         if let close = text.range(of: "</think>", options: .caseInsensitive) {
             text = String(text[close.upperBound...]).trimmingCharacters(in: .whitespacesAndNewlines)
         } else if let open = text.range(of: "<think>", options: .caseInsensitive) {
-            text = String(text[..<open.lowerBound]).trimmingCharacters(in: .whitespacesAndNewlines)
+            let beforeThink = String(text[..<open.lowerBound]).trimmingCharacters(in: .whitespacesAndNewlines)
+            // An opening think tag without a closing tag has no trustworthy final
+            // answer after it. Keep only genuine text that preceded the tag.
+            guard !beforeThink.isEmpty else { return nil }
+            text = beforeThink
         }
 
-        for marker in ["Answer:", "Final Answer:", "Final:"] {
+        if let final = reliableFinalAnswer(in: text) {
+            text = final
+        } else if isKnownReasoningTranscript(text) {
+            // Do not guess where an untagged reasoning transcript ends. If an older
+            // build did not provide a reliable final-answer boundary, remove that
+            // assistant message instead of exposing private scratch work.
+            return nil
+        }
+
+        guard !text.isEmpty else { return nil }
+        return ChatMessage(id: message.id, role: message.role, text: text, createdAt: message.createdAt)
+    }
+
+    private static func reliableFinalAnswer(in text: String) -> String? {
+        // Prefer the most explicit marker first so "Answer:" inside
+        // "Final Answer:" cannot win accidentally.
+        for marker in ["Final Answer:", "Final:", "Answer:"] {
             if let range = text.range(of: marker, options: .caseInsensitive) {
                 let candidate = text[range.upperBound...].trimmingCharacters(in: .whitespacesAndNewlines)
-                if !candidate.isEmpty { text = String(candidate) }
-                break
+                if !candidate.isEmpty { return String(candidate) }
             }
         }
+        return nil
+    }
 
-        return ChatMessage(id: message.id, role: message.role, text: text, createdAt: message.createdAt)
+    private static func isKnownReasoningTranscript(_ text: String) -> Bool {
+        let normalized = text.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        return normalized.hasPrefix("thinking process:")
     }
 
     func save(_ messages: [ChatMessage]) {
