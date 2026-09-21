@@ -14,6 +14,7 @@ final class ChatViewModel: ObservableObject {
     @Published var isDownloadingModel = false
     @Published var modelDownloadReady = false
     @Published var modelProgress: Double = 0
+    @Published var downloadETA: String?
     @Published var benchmarkResult: ModelBenchmarkSnapshot?
     @Published var benchmarkError: String?
 
@@ -22,6 +23,7 @@ final class ChatViewModel: ObservableObject {
     private let store = ConversationStore()
     private let defaults = UserDefaults.standard
     private var lastLoadSeconds: Double = 0
+    private var lastProgressSample: (date: Date, progress: Double)?
     private var downloadObserver: NSObjectProtocol?
     private var downloadFinishObserver: NSObjectProtocol?
 
@@ -101,6 +103,23 @@ final class ChatViewModel: ObservableObject {
 
             guard selectedModel == model else { return }
 
+            let now = Date()
+            if snapshot.isDownloading, let previous = lastProgressSample {
+                let elapsed = now.timeIntervalSince(previous.date)
+                let delta = snapshot.progress - previous.progress
+                if elapsed >= 1, delta > 0.0001 {
+                    let rate = delta / elapsed
+                    let seconds = (1 - snapshot.progress) / rate
+                    downloadETA = Self.formatETA(seconds)
+                } else if downloadETA == nil {
+                    downloadETA = "Calculating…"
+                }
+            } else if snapshot.isDownloading {
+                downloadETA = "Calculating…"
+            } else {
+                downloadETA = nil
+            }
+            lastProgressSample = snapshot.isDownloading ? (now, snapshot.progress) : nil
             modelProgress = snapshot.progress
             isDownloadingModel = snapshot.isDownloading
             modelDownloadReady = snapshot.isReady
@@ -222,6 +241,16 @@ final class ChatViewModel: ObservableObject {
         }
     }
 
+    private static func formatETA(_ seconds: TimeInterval) -> String {
+        guard seconds.isFinite, seconds >= 0 else { return "Calculating…" }
+        let value = Int(seconds.rounded())
+        if value < 60 { return "~\(max(value, 1)) sec remaining" }
+        if value < 3600 { return "~\(max(value / 60, 1)) min remaining" }
+        let hours = value / 3600
+        let minutes = (value % 3600) / 60
+        return minutes > 0 ? "~\(hours)h \(minutes)m remaining" : "~\(hours)h remaining"
+    }
+
     func send() {
         let prompt = draft.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !prompt.isEmpty, !isThinking else { return }
@@ -241,11 +270,32 @@ final class ChatViewModel: ObservableObject {
         isThinking = true
 
         Task {
+            let operationID = UUID().uuidString
+            SenseiDiagnostics.shared.record(
+                operationID: operationID,
+                model: loadedModel?.name,
+                stage: "GENERATION_STARTED",
+                message: "ChatSession generation started."
+            )
             do {
                 let answer = try await ai.reply(to: prompt)
+                SenseiDiagnostics.shared.record(
+                    operationID: operationID,
+                    model: loadedModel?.name,
+                    stage: "GENERATION_COMPLETE",
+                    message: "ChatSession returned a response.",
+                    level: "SUCCESS"
+                )
                 append(ChatMessage(role: .assistant, text: answer))
                 statusText = "LOCAL"
             } catch {
+                SenseiDiagnostics.shared.record(
+                    operationID: operationID,
+                    model: loadedModel?.name,
+                    stage: "GENERATION_ERROR",
+                    message: error.localizedDescription,
+                    level: "ERROR"
+                )
                 append(
                     ChatMessage(
                         role: .assistant,
