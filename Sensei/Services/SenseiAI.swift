@@ -49,7 +49,11 @@ final class SenseiAI {
     You are SENSEI, a private personal AI running locally on the user's iPhone.
 
     Core behavior:
-    - Be accurate, direct, useful, and conversational.\n    - Keep normal answers concise: usually 2-4 sentences. Expand when the task genuinely needs more detail or the user asks for it.\n    - Never dump chain-of-thought, scratch work, drafting notes, or long internal deliberation into chat.\n    - Keep all reasoning, chain-of-thought, scratch work, planning, and drafting private. Never output it.\n    - Output only the final answer. The app itself shows a Thinking… status while generation is in progress.\n    - Stop once the question has been answered; do not repeat, recap, or pad the response.
+    - Be accurate, direct, useful, and conversational.
+    - Keep normal answers concise: usually 2-4 sentences. Expand when the task genuinely needs more detail or the user asks for it.
+    - Keep reasoning, chain-of-thought, scratch work, planning, and drafting private.
+    - Output only the final answer; never print a thinking transcript.
+    - Stop once the question has been answered; do not repeat, recap, or pad the response.
     - Answer the user's requests normally whenever the model can answer them.
     - Do not invent extra refusal rules.
     - Do not refuse merely because a request is subjective, opinion-based, edgy, unconventional, controversial, approximate, speculative, or depends on judgment.
@@ -211,6 +215,20 @@ final class SenseiAI {
         )
     }
 
+    private static func finalAnswer(from raw: String) -> String {
+        if let close = raw.range(of: "</think>", options: .caseInsensitive) {
+            let answer = raw[close.upperBound...].trimmingCharacters(in: .whitespacesAndNewlines)
+            if !answer.isEmpty { return String(answer) }
+        }
+        for marker in ["Answer:", "Final Answer:", "Final:"] {
+            if let range = raw.range(of: marker, options: .caseInsensitive) {
+                let answer = raw[range.upperBound...].trimmingCharacters(in: .whitespacesAndNewlines)
+                if !answer.isEmpty { return String(answer) }
+            }
+        }
+        return raw.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
     func benchmarkCurrent(loadSeconds: Double = 0) async throws -> ModelBenchmarkSnapshot {
         guard let container, let model = loadedModel else {
             throw SenseiAIError.noModelLoaded
@@ -223,7 +241,8 @@ final class SenseiAI {
 
         let benchmarkSession = ChatSession(
             container,
-            instructions: benchmarkInstructions
+            instructions: benchmarkInstructions,
+            generateParameters: GenerateParameters(maxTokens: 96)
         )
 
         let prompt = """
@@ -236,7 +255,8 @@ final class SenseiAI {
         """
 
         let started = Date()
-        let response = try await benchmarkSession.respond(to: prompt)
+        let rawResponse = try await benchmarkSession.respond(to: prompt)
+        let response = Self.finalAnswer(from: rawResponse)
         let responseSeconds = Date().timeIntervalSince(started)
 
         let normalized = response
