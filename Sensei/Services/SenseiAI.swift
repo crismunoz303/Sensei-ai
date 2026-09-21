@@ -65,25 +65,17 @@ final class SenseiAI {
             throw SenseiAIError.modelNotDownloaded
         }
 
+        let loadDirectory: URL
         if model == .qwen35_9b {
-            let physicalMemory = ProcessInfo.processInfo.physicalMemory
-
-            // Qwen3.5 9B 4-bit is ~6 GB on disk. On an 8 GB-class iPhone,
-            // loading it through MLX crosses iOS's per-process memory budget
-            // before Swift can receive a recoverable allocation error; iOS
-            // terminates the process (jetsam). This exact failure was
-            // reproduced on the iPhone 16 Pro.
-            //
-            // Do not attempt the known-crashing path on 8 GB-class devices.
-            // Keep the downloaded model on disk so it can still be used on a
-            // future device with a larger memory budget.
-            let minimumMemoryFor9BAttempt: UInt64 = 10_000_000_000
-
-            guard physicalMemory >= minimumMemoryFor9BAttempt else {
-                throw SenseiAIError.nineBUnsafeOnThisDevice(
-                    detectedBytes: physicalMemory
-                )
-            }
+            // The downloaded Qwen3.5 9B archive is a unified vision-language
+            // checkpoint. Build/reuse a language-only runtime checkpoint so
+            // MLX never materializes the unused vision tower during LLM load.
+            loadDirectory = try await Qwen35TextRuntimePreparer.prepare(
+                from: directory,
+                progressHandler: progressHandler
+            )
+        } else {
+            loadDirectory = directory
         }
 
         sessionBox = nil
@@ -98,7 +90,7 @@ final class SenseiAI {
         let started = Date()
 
         let loaded = try await LLMModelFactory.shared.loadContainer(
-            from: directory,
+            from: loadDirectory,
             using: #huggingFaceTokenizerLoader()
         )
 
@@ -194,12 +186,6 @@ enum SenseiAIError: LocalizedError {
             return "No local SENSEI model is loaded."
         case .modelNotDownloaded:
             return "This SENSEI model has not finished downloading yet."
-        case .nineBUnsafeOnThisDevice(let detectedBytes):
-            let detectedGB = Double(detectedBytes) / 1_000_000_000
-            return String(
-                format: "Qwen3.5 9B is too large to load safely on this %.1f GB iPhone and can cause iOS to terminate SENSEI. The downloaded 9B files have been kept. Use Qwen3 8B for the strongest supported local option on this device.",
-                detectedGB
-            )
         }
     }
 }
