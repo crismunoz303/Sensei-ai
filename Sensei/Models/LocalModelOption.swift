@@ -45,9 +45,9 @@ enum LocalModelOption: String, CaseIterable, Identifiable, Codable, Sendable {
     var detail: String {
         switch self {
         case .qwen35_9b:
-            "Highest-quality candidate. Heavy memory use; this is the first model to test for maximum local capability."
+            "Highest-quality candidate, but its ~6 GB 4-bit weights exceed the safe local loading budget on 8 GB-class iPhones. SENSEI will preserve the download instead of attempting a load that can make iOS terminate the app."
         case .qwen3_8b:
-            "Strong, mature text model. Use this as the stability and quality baseline."
+            "Strong, mature text model and the strongest supported local option for 8 GB-class iPhones."
         case .qwen35_4b:
             "Newer architecture with a much smaller footprint. Best candidate when speed and thermals matter."
         }
