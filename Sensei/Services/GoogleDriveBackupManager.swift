@@ -12,6 +12,7 @@ final class GoogleDriveBackupManager: ObservableObject {
     @Published private(set) var detail = "Sign in once to let SENSEI back up completed models automatically."
     @Published private(set) var isBackingUp = false
     @Published private(set) var backupProgress: Double = 0
+    @Published private(set) var backupETA: String?
 
     private let scope = "https://www.googleapis.com/auth/drive.file"
     private let clientID = "934355792148-tlle93u7lt07l9vmj9kpttdfonk3lrer.apps.googleusercontent.com"
@@ -64,6 +65,7 @@ final class GoogleDriveBackupManager: ObservableObject {
 
         isBackingUp = true
         backupProgress = 0
+        backupETA = "Calculating…"
         status = "BACKING UP"
         detail = "Preparing \(model.name) for Google Drive…"
 
@@ -81,21 +83,39 @@ final class GoogleDriveBackupManager: ObservableObject {
             partial + ((try? file.resourceValues(forKeys: [.fileSizeKey]).fileSize).map(Int64.init) ?? 0)
         }, 1)
         var uploadedBytes: Int64 = 0
+        let backupStarted = Date()
 
         for file in files {
             let relative = file.path.replacingOccurrences(of: directory.path + "/", with: "")
             let size = (try? file.resourceValues(forKeys: [.fileSizeKey]).fileSize).map(Int64.init) ?? 0
-            detail = "Uploading \(model.name)… \(Int(backupProgress * 100))%"
-            try await uploadResumable(file: file, name: model.rawValue + "/" + relative, parentID: folderID, accessToken: token)
+            try await uploadResumable(
+                file: file,
+                name: model.rawValue + "/" + relative,
+                parentID: folderID,
+                accessToken: token
+            ) { [weak self] fileBytesSent in
+                guard let self else { return }
+                let currentBytes = uploadedBytes + fileBytesSent
+                self.backupProgress = min(1, Double(currentBytes) / Double(totalBytes))
+                let elapsed = Date().timeIntervalSince(backupStarted)
+                if elapsed >= 2, currentBytes > 0 {
+                    let bytesPerSecond = Double(currentBytes) / elapsed
+                    let remaining = Double(max(totalBytes - currentBytes, 0)) / bytesPerSecond
+                    self.backupETA = Self.formatETA(remaining)
+                }
+                self.detail = "Uploading \(model.name)… \(Int(self.backupProgress * 100))%"
+            }
             uploadedBytes += size
             backupProgress = min(1, Double(uploadedBytes) / Double(totalBytes))
         }
 
         backupProgress = 1
+        backupETA = nil
         isBackingUp = false
         status = "BACKED UP"
         detail = "\(model.name) is backed up to Google Drive."
         } catch {
+            backupETA = nil
             isBackingUp = false
             status = "BACKUP FAILED"
             detail = error.localizedDescription
@@ -174,9 +194,16 @@ final class GoogleDriveBackupManager: ObservableObject {
         return id
     }
 
-    private func uploadResumable(file: URL, name: String, parentID: String, accessToken: String) async throws {
+    private func uploadResumable(
+        file: URL,
+        name: String,
+        parentID: String,
+        accessToken: String,
+        progress: @escaping @MainActor (Int64) -> Void
+    ) async throws {
         var start = URLRequest(url: URL(string: "https://www.googleapis.com/upload/drive/v3/files?uploadType=resumable&fields=id")!)
         start.httpMethod = "POST"
+        start.timeoutInterval = 45
         start.setValue("Bearer \(accessToken)", forHTTPHeaderField: "Authorization")
         start.setValue("application/json; charset=UTF-8", forHTTPHeaderField: "Content-Type")
         start.httpBody = try JSONSerialization.data(withJSONObject: ["name": name, "parents": [parentID]])
@@ -186,11 +213,48 @@ final class GoogleDriveBackupManager: ObservableObject {
               let location = http.value(forHTTPHeaderField: "Location"),
               let uploadURL = URL(string: location) else { throw DriveBackupError.invalidResponse }
 
-        var upload = URLRequest(url: uploadURL)
-        upload.httpMethod = "PUT"
-        upload.setValue("application/octet-stream", forHTTPHeaderField: "Content-Type")
-        let (_, response) = try await URLSession.shared.upload(for: upload, fromFile: file)
-        try Self.requireSuccess(response)
+        let values = try file.resourceValues(forKeys: [.fileSizeKey])
+        let total = Int64(values.fileSize ?? 0)
+        let chunkSize: Int64 = 8 * 1024 * 1024
+        let handle = try FileHandle(forReadingFrom: file)
+        defer { try? handle.close() }
+
+        var offset: Int64 = 0
+        while offset < total {
+            let length = Int(min(chunkSize, total - offset))
+            try handle.seek(toOffset: UInt64(offset))
+            guard let chunk = try handle.read(upToCount: length), !chunk.isEmpty else {
+                throw DriveBackupError.fileReadFailed
+            }
+
+            let end = offset + Int64(chunk.count) - 1
+            var upload = URLRequest(url: uploadURL)
+            upload.httpMethod = "PUT"
+            upload.timeoutInterval = 45
+            upload.setValue("application/octet-stream", forHTTPHeaderField: "Content-Type")
+            upload.setValue(String(chunk.count), forHTTPHeaderField: "Content-Length")
+            upload.setValue("bytes \(offset)-\(end)/\(total)", forHTTPHeaderField: "Content-Range")
+
+            let (_, response) = try await URLSession.shared.upload(for: upload, from: chunk)
+            guard let http = response as? HTTPURLResponse,
+                  http.statusCode == 308 || (200..<300).contains(http.statusCode)
+            else {
+                throw DriveBackupError.requestFailed
+            }
+
+            offset = end + 1
+            await progress(offset)
+        }
+    }
+
+    private static func formatETA(_ seconds: TimeInterval) -> String {
+        guard seconds.isFinite, seconds >= 0 else { return "Calculating…" }
+        let value = Int(seconds.rounded())
+        if value < 60 { return "~\(max(value, 1)) sec remaining" }
+        if value < 3600 { return "~\(max(value / 60, 1)) min remaining" }
+        let hours = value / 3600
+        let minutes = (value % 3600) / 60
+        return minutes > 0 ? "~\(hours)h \(minutes)m remaining" : "~\(hours)h remaining"
     }
 
     private static func requireSuccess(_ response: URLResponse) throws {
@@ -208,7 +272,7 @@ final class GoogleDriveBackupManager: ObservableObject {
 }
 
 enum DriveBackupError: LocalizedError {
-    case noPresenter, notSignedIn, tokenRefreshFailed, invalidResponse, requestFailed, modelNotAvailable
+    case noPresenter, notSignedIn, tokenRefreshFailed, invalidResponse, requestFailed, modelNotAvailable, fileReadFailed
     var errorDescription: String? {
         switch self {
         case .noPresenter: "SENSEI could not open Google sign-in."
@@ -217,6 +281,7 @@ enum DriveBackupError: LocalizedError {
         case .invalidResponse: "Google Drive returned an invalid response."
         case .requestFailed: "Google Drive request failed."
         case .modelNotAvailable: "The completed local model could not be found on this iPhone."
+        case .fileReadFailed: "SENSEI could not read a local model file for backup."
         }
     }
 }
