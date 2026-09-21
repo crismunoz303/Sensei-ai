@@ -5,6 +5,7 @@ struct ModelLabView: View {
     @Environment(\.dismiss) private var dismiss
     @StateObject private var drive = GoogleDriveBackupManager.shared
     @State private var showDiagnostics = false
+    @State private var showMemory = false
 
     var body: some View {
         NavigationStack {
@@ -25,11 +26,18 @@ struct ModelLabView: View {
             .navigationTitle("MODEL LAB")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
-                ToolbarItem(placement: .topBarLeading) {
+                ToolbarItemGroup(placement: .topBarLeading) {
                     Button {
                         showDiagnostics = true
                     } label: {
-                        Label("Errors", systemImage: "exclamationmark.triangle")
+                        Image(systemName: "exclamationmark.triangle")
+                    }
+                    .foregroundStyle(.red)
+
+                    Button {
+                        showMemory = true
+                    } label: {
+                        Image(systemName: "brain")
                     }
                     .foregroundStyle(.red)
                 }
@@ -46,6 +54,10 @@ struct ModelLabView: View {
             }
             .sheet(isPresented: $showDiagnostics) {
                 DiagnosticsView()
+                    .preferredColorScheme(.dark)
+            }
+            .sheet(isPresented: $showMemory) {
+                MemoryView()
                     .preferredColorScheme(.dark)
             }
 
