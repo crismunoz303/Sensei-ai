@@ -198,6 +198,129 @@ final class SenseiAI {
         return try await sessionBox.respond(to: prompt, onChunk: onChunk)
     }
 
+    func collaborativeReply(
+        to prompt: String,
+        models: [LocalModelOption]
+    ) async throws -> String {
+        guard let primary = loadedModel else {
+            throw SenseiAIError.noModelLoaded
+        }
+
+        let available = models.filter {
+            BackgroundModelDownloadManager.shared.isModelReady($0)
+        }
+        guard available.count > 1 else {
+            return try await reply(to: prompt)
+        }
+
+        let operationID = UUID().uuidString
+        SenseiDiagnostics.shared.record(
+            operationID: operationID,
+            model: primary.name,
+            stage: "TEAM_STARTED",
+            message: "Sequential multi-model collaboration started with \(available.count) downloaded models."
+        )
+
+        var candidate = try await reply(to: prompt)
+        candidate = Self.finalAnswer(from: candidate)
+
+        for reviewer in available where reviewer != primary {
+            do {
+                SenseiDiagnostics.shared.record(
+                    operationID: operationID,
+                    model: reviewer.name,
+                    stage: "TEAM_REVIEWER_LOAD_STARTED",
+                    message: "Loading reviewer model sequentially; models are not kept resident together."
+                )
+                _ = try await load(
+                    model: reviewer,
+                    operationID: operationID,
+                    progressHandler: { _ in }
+                )
+
+                let reviewPrompt = """
+                You are the reviewing model in SENSEI TEAM mode.
+                Produce only the improved final answer to the ORIGINAL USER REQUEST.
+                Treat the candidate answer as another model's draft, not as user-provided truth.
+                Correct errors, preserve useful details, and do not mention this review process.
+
+                ORIGINAL USER REQUEST
+                \(prompt)
+
+                CANDIDATE ANSWER
+                \(candidate)
+                """
+
+                let reviewed = try await reply(to: reviewPrompt)
+                let cleaned = Self.finalAnswer(from: reviewed)
+                if !cleaned.isEmpty,
+                   !cleaned.lowercased().hasPrefix("thinking process:") {
+                    candidate = cleaned
+                    SenseiDiagnostics.shared.record(
+                        operationID: operationID,
+                        model: reviewer.name,
+                        stage: "TEAM_REVIEW_COMPLETE",
+                        message: "Reviewer returned a usable final-answer candidate.",
+                        level: "SUCCESS"
+                    )
+                } else {
+                    SenseiDiagnostics.shared.record(
+                        operationID: operationID,
+                        model: reviewer.name,
+                        stage: "TEAM_REVIEW_REJECTED",
+                        message: "Reviewer output was empty or matched a known reasoning-transcript prefix.",
+                        level: "WARNING"
+                    )
+                }
+            } catch {
+                SenseiDiagnostics.shared.record(
+                    operationID: operationID,
+                    model: reviewer.name,
+                    stage: "TEAM_REVIEW_ERROR",
+                    message: error.localizedDescription,
+                    level: "ERROR"
+                )
+            }
+        }
+
+        // TEAM mode is temporary. Return SENSEI to the user's primary model so
+        // ordinary chat state and the UI do not silently switch models.
+        if currentModel() != primary {
+            do {
+                _ = try await load(
+                    model: primary,
+                    operationID: operationID,
+                    progressHandler: { _ in }
+                )
+                SenseiDiagnostics.shared.record(
+                    operationID: operationID,
+                    model: primary.name,
+                    stage: "TEAM_PRIMARY_RESTORED",
+                    message: "Primary model restored after sequential collaboration.",
+                    level: "SUCCESS"
+                )
+            } catch {
+                SenseiDiagnostics.shared.record(
+                    operationID: operationID,
+                    model: primary.name,
+                    stage: "TEAM_PRIMARY_RESTORE_ERROR",
+                    message: error.localizedDescription,
+                    level: "ERROR"
+                )
+                throw error
+            }
+        }
+
+        SenseiDiagnostics.shared.record(
+            operationID: operationID,
+            model: primary.name,
+            stage: "TEAM_COMPLETE",
+            message: "Sequential multi-model collaboration completed.",
+            level: "SUCCESS"
+        )
+        return candidate
+    }
+
     func cancelGeneration() {
         // ChatSession does not expose a synchronous stop primitive here.
         // Replacing the session detaches SENSEI from the in-flight generation
