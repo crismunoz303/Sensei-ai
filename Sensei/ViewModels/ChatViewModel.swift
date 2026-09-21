@@ -305,31 +305,25 @@ final class ChatViewModel: ObservableObject {
     }
 
     private static func compactStreamDisplay(_ raw: String) -> String {
+        // Never render model scratch work. Qwen variants may emit reasoning
+        // before a final-answer marker even when instructed not to.
         let answerMarkers = ["Answer:", "Final Answer:", "Final:"]
         for marker in answerMarkers {
             if let range = raw.range(of: marker, options: .caseInsensitive) {
-                let prefix = String(raw[..<range.lowerBound])
-                let answer = String(raw[range.lowerBound...])
-                let thinkingLine = prefix
-                    .split(whereSeparator: { $0.isNewline })
-                    .map(String.init)
-                    .first(where: { $0.localizedCaseInsensitiveContains("Thinking:") })
-
-                if let thinkingLine {
-                    let compactThinking = String(thinkingLine.prefix(140))
-                    return compactThinking + "\n" + answer
-                }
-                return answer
+                let answer = raw[range.upperBound...]
+                    .trimmingCharacters(in: .whitespacesAndNewlines)
+                return answer.isEmpty ? "Thinking…" : answer
             }
         }
 
-        // While the model is still producing its pre-answer text, keep the
-        // live bubble bounded so SwiftUI does not continuously lay out a huge
-        // growing reasoning transcript.
-        if raw.count > 180 {
-            return String(raw.prefix(180)) + "…"
+        // Common Qwen think-tag format: only reveal text after </think>.
+        if let range = raw.range(of: "</think>", options: .caseInsensitive) {
+            let answer = raw[range.upperBound...]
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            return answer.isEmpty ? "Thinking…" : answer
         }
-        return raw
+
+        return "Thinking…"
     }
 
     func send() {
