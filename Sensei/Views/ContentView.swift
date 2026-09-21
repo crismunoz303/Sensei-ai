@@ -126,7 +126,7 @@ struct ContentView: View {
                 } label: {
                     Text("FAST")
                         .font(.caption2.monospaced().weight(.bold))
-                        .foregroundStyle(chat.collaborationMode ? .secondary : .white)
+                        .foregroundStyle(chat.collaborationMode ? Color.secondary : Color.white)
                         .padding(.horizontal, 11)
                         .padding(.vertical, 7)
                         .background(chat.collaborationMode ? Color.white.opacity(0.06) : Color.red.opacity(0.8), in: Capsule())
@@ -142,7 +142,7 @@ struct ContentView: View {
                         Text("TEAM")
                     }
                     .font(.caption2.monospaced().weight(.bold))
-                    .foregroundStyle(chat.collaborationMode ? .white : (chat.collaborationAvailable ? .red : .secondary))
+                    .foregroundStyle(chat.collaborationMode ? Color.white : (chat.collaborationAvailable ? Color.red : Color.secondary))
                     .padding(.horizontal, 11)
                     .padding(.vertical, 7)
                     .background(chat.collaborationMode ? Color.red.opacity(0.8) : Color.white.opacity(0.06), in: Capsule())
