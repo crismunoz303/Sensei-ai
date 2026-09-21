@@ -232,8 +232,16 @@ final class ChatViewModel: ObservableObject {
     }
 
     func runBenchmark() {
-        guard loadedModel == selectedModel, !isLoadingModel, !isThinking else {
-            benchmarkError = "Load the selected model first."
+        guard loadedModel == selectedModel else {
+            benchmarkError = "The selected model is not loaded. Load it first."
+            return
+        }
+        guard !isLoadingModel else {
+            benchmarkError = "The model is still loading."
+            return
+        }
+        guard !isThinking else {
+            benchmarkError = "A chat generation is still running. Check Errors / Diagnostics for its last checkpoint."
             return
         }
 
@@ -242,10 +250,43 @@ final class ChatViewModel: ObservableObject {
         benchmarkResult = nil
 
         Task {
+            let operationID = UUID().uuidString
+            SenseiDiagnostics.shared.record(
+                operationID: operationID,
+                model: loadedModel?.name,
+                stage: "BENCHMARK_STARTED",
+                message: "On-device benchmark generation started."
+            )
+            let stallWatch = Task { @MainActor in
+                try? await Task.sleep(for: .seconds(20))
+                guard !Task.isCancelled, self.isThinking else { return }
+                SenseiDiagnostics.shared.record(
+                    operationID: operationID,
+                    model: self.loadedModel?.name,
+                    stage: "BENCHMARK_STILL_RUNNING",
+                    message: "Benchmark has not returned after 20 seconds.",
+                    level: "WARNING"
+                )
+            }
+            defer { stallWatch.cancel() }
             do {
                 benchmarkResult = try await ai.benchmarkCurrent(loadSeconds: lastLoadSeconds)
+                SenseiDiagnostics.shared.record(
+                    operationID: operationID,
+                    model: loadedModel?.name,
+                    stage: "BENCHMARK_COMPLETE",
+                    message: "Benchmark returned a response.",
+                    level: "SUCCESS"
+                )
             } catch {
                 benchmarkError = error.localizedDescription
+                SenseiDiagnostics.shared.record(
+                    operationID: operationID,
+                    model: loadedModel?.name,
+                    stage: "BENCHMARK_ERROR",
+                    message: error.localizedDescription,
+                    level: "ERROR"
+                )
             }
 
             isThinking = false
@@ -288,6 +329,18 @@ final class ChatViewModel: ObservableObject {
                 stage: "GENERATION_STARTED",
                 message: "ChatSession generation started."
             )
+            let stallWatch = Task { @MainActor in
+                try? await Task.sleep(for: .seconds(20))
+                guard !Task.isCancelled, self.isThinking else { return }
+                SenseiDiagnostics.shared.record(
+                    operationID: operationID,
+                    model: self.loadedModel?.name,
+                    stage: "GENERATION_STILL_RUNNING",
+                    message: "Chat generation has not returned after 20 seconds.",
+                    level: "WARNING"
+                )
+            }
+            defer { stallWatch.cancel() }
             do {
                 let answer = try await ai.reply(to: prompt)
                 SenseiDiagnostics.shared.record(
