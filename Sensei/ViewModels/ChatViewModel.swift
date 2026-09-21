@@ -322,66 +322,92 @@ final class ChatViewModel: ObservableObject {
         append(ChatMessage(role: .user, text: prompt))
         isThinking = true
 
+        // Create the assistant bubble immediately and mutate it as MLX streams
+        // chunks. The user sees output as soon as the first token arrives.
+        let responseID = UUID()
+        let responseCreatedAt = Date()
+        messages.append(
+            ChatMessage(
+                id: responseID,
+                role: .assistant,
+                text: "",
+                createdAt: responseCreatedAt
+            )
+        )
+
         generationTask = Task {
             let operationID = UUID().uuidString
             SenseiDiagnostics.shared.record(
                 operationID: operationID,
                 model: loadedModel?.name,
                 stage: "GENERATION_STARTED",
-                message: "ChatSession generation started."
+                message: "ChatSession streaming generation started."
             )
-            let stallWatch = Task { @MainActor in
-                try? await Task.sleep(for: .seconds(20))
-                guard !Task.isCancelled, self.isThinking else { return }
-                SenseiDiagnostics.shared.record(
-                    operationID: operationID,
-                    model: self.loadedModel?.name,
-                    stage: "GENERATION_STILL_RUNNING",
-                    message: "Chat generation has not returned after 20 seconds.",
-                    level: "WARNING"
-                )
-            }
-            defer { stallWatch.cancel() }
+
+            var streamedText = ""
+            var receivedFirstChunk = false
+
             do {
-                var receivedFirstChunk = false
-                let answer = try await ai.reply(to: prompt) { chunk in
-                    guard !chunk.isEmpty else { return }
+                _ = try await ai.reply(to: prompt) { chunk in
+                    guard !chunk.isEmpty, !Task.isCancelled else { return }
+
+                    streamedText += chunk
+                    if let index = self.messages.firstIndex(where: { $0.id == responseID }) {
+                        self.messages[index] = ChatMessage(
+                            id: responseID,
+                            role: .assistant,
+                            text: streamedText,
+                            createdAt: responseCreatedAt
+                        )
+                    }
+
                     if !receivedFirstChunk {
                         receivedFirstChunk = true
                         SenseiDiagnostics.shared.record(
                             operationID: operationID,
                             model: self.loadedModel?.name,
                             stage: "GENERATION_FIRST_CHUNK",
-                            message: "Chat streaming returned its first text chunk.",
+                            message: "First streamed text is visible in chat.",
                             level: "SUCCESS"
                         )
                     }
                 }
+
                 try Task.checkCancellation()
+                store.save(messages)
                 SenseiDiagnostics.shared.record(
                     operationID: operationID,
                     model: loadedModel?.name,
                     stage: "GENERATION_COMPLETE",
-                    message: "ChatSession returned a response.",
+                    message: "Streaming response completed and was saved.",
                     level: "SUCCESS"
                 )
-                append(ChatMessage(role: .assistant, text: answer))
                 statusText = "LOCAL"
             } catch is CancellationError {
-                // User-requested stop is already recorded by stopThinking().
+                // Preserve whatever text was already streamed when STOP was used.
+                if streamedText.isEmpty {
+                    messages.removeAll { $0.id == responseID }
+                } else {
+                    store.save(messages)
+                }
             } catch {
+                if streamedText.isEmpty {
+                    if let index = messages.firstIndex(where: { $0.id == responseID }) {
+                        messages[index] = ChatMessage(
+                            id: responseID,
+                            role: .assistant,
+                            text: "Local model error: \(error.localizedDescription)",
+                            createdAt: responseCreatedAt
+                        )
+                    }
+                }
+                store.save(messages)
                 SenseiDiagnostics.shared.record(
                     operationID: operationID,
                     model: loadedModel?.name,
                     stage: "GENERATION_ERROR",
                     message: error.localizedDescription,
                     level: "ERROR"
-                )
-                append(
-                    ChatMessage(
-                        role: .assistant,
-                        text: "Local model error: \(error.localizedDescription)"
-                    )
                 )
                 statusText = "ERROR"
             }
