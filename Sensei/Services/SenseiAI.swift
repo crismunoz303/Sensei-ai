@@ -171,6 +171,17 @@ final class SenseiAI {
         return try await sessionBox.respond(to: prompt)
     }
 
+    func cancelGeneration() {
+        // ChatSession does not expose a synchronous stop primitive here.
+        // Replacing the session detaches SENSEI from the in-flight generation
+        // so the UI can immediately accept another prompt.
+        guard let container else {
+            sessionBox = nil
+            return
+        }
+        sessionBox = SenseiSessionBox(container: container, instructions: Self.instructions)
+    }
+
     func resetConversation() {
         guard let container else {
             sessionBox = nil
