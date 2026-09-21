@@ -56,10 +56,10 @@ jobs:
           rm -rf Payload
           mkdir -p Payload
           cp -R build/Build/Products/Release-iphoneos/SENSEI.app Payload/
-          zip -r SENSEI-V10.ipa Payload
+          zip -r SENSEI-V11.ipa Payload
 
       - name: Upload IPA
         uses: actions/upload-artifact@v4
         with:
-          name: SENSEI-V10
-          path: SENSEI-V10.ipa
+          name: SENSEI-V11
+          path: SENSEI-V11.ipa
