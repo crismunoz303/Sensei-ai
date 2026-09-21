@@ -20,6 +20,7 @@ final class ChatViewModel: ObservableObject {
     @Published var benchmarkError: String?
     @Published var isRunningBenchmark = false
     @Published var collaborationMode = false
+    @Published var individualMode = false
 
     private let ai = SenseiAI.shared
     private let downloads = BackgroundModelDownloadManager.shared
@@ -133,6 +134,26 @@ final class ChatViewModel: ObservableObject {
         benchmarkResult = nil
         benchmarkError = nil
         refreshDownloadState()
+    }
+
+    func activateFastMode() {
+        collaborationMode = false
+        individualMode = false
+    }
+
+    func activateTeamMode() {
+        guard collaborationAvailable else { return }
+        collaborationMode = true
+        individualMode = false
+    }
+
+    func activateIndividualMode(_ model: LocalModelOption) {
+        guard downloads.isModelReady(model), !isThinking, !isLoadingModel else { return }
+        collaborationMode = false
+        individualMode = true
+        selectModel(model)
+        guard loadedModel != model else { return }
+        loadModelFromDisk(model)
     }
 
     func refreshDownloadState() {
