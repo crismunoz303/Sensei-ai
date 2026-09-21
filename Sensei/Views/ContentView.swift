@@ -88,7 +88,7 @@ struct ContentView: View {
                         HStack {
                             ProgressView()
                                 .tint(.red)
-                            Text("SENSEI is thinking locally…")
+                            Text(chat.thinkingStatus)
                                 .font(.footnote)
                                 .foregroundStyle(.secondary)
                             Spacer()
