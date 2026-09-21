@@ -434,7 +434,26 @@ final class ChatViewModel: ObservableObject {
 
 
             do {
-                _ = try await ai.reply(to: prompt) { chunk in
+                let memoryContext = SenseiMemoryStore.shared.context(for: prompt)
+                let modelPrompt: String
+                if let memoryContext {
+                    modelPrompt = """
+                    \(memoryContext)
+
+                    CURRENT USER REQUEST
+                    \(prompt)
+                    """
+                    SenseiDiagnostics.shared.record(
+                        operationID: operationID,
+                        model: loadedModel?.name,
+                        stage: "MEMORY_CONTEXT_ATTACHED",
+                        message: "Relevant persistent local memories were attached to this generation."
+                    )
+                } else {
+                    modelPrompt = prompt
+                }
+
+                _ = try await ai.reply(to: modelPrompt) { chunk in
                     guard !chunk.isEmpty, !Task.isCancelled else { return }
 
                     streamedText += chunk
