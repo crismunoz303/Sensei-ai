@@ -100,9 +100,17 @@ final class ChatViewModel: ObservableObject {
 
         // A downloaded model survives app restarts, but an MLX model in RAM does not.
         // Restore the selected model automatically whenever its files are complete.
-        if downloads.isModelReady(selectedModel) {
-            loadModelFromDisk(selectedModel)
+        restoreSelectedModelIfNeeded()
+    }
+
+    func restoreSelectedModelIfNeeded() {
+        guard loadedModel == nil, !isLoadingModel, !isDownloadingModel else { return }
+        let model = selectedModel
+        guard downloads.isModelReady(model) else {
+            refreshDownloadState()
+            return
         }
+        loadModelFromDisk(model)
     }
 
     func selectModel(_ model: LocalModelOption) {
