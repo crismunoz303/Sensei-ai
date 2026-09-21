@@ -18,8 +18,18 @@ private final class SenseiSessionBox: @unchecked Sendable {
         self.session = ChatSession(container, instructions: instructions)
     }
 
-    func respond(to prompt: String) async throws -> String {
-        try await session.respond(to: prompt)
+    func respond(
+        to prompt: String,
+        onChunk: @escaping @MainActor @Sendable (String) -> Void
+    ) async throws -> String {
+        var output = ""
+        for try await chunk in session.streamResponse(to: prompt) {
+            try Task.checkCancellation()
+            output += chunk
+            await onChunk(chunk)
+        }
+        try Task.checkCancellation()
+        return output
     }
 }
 
@@ -163,12 +173,15 @@ final class SenseiAI {
         return Date().timeIntervalSince(started)
     }
 
-    func reply(to prompt: String) async throws -> String {
+    func reply(
+        to prompt: String,
+        onChunk: @escaping @MainActor @Sendable (String) -> Void = { _ in }
+    ) async throws -> String {
         guard let sessionBox else {
             throw SenseiAIError.noModelLoaded
         }
 
-        return try await sessionBox.respond(to: prompt)
+        return try await sessionBox.respond(to: prompt, onChunk: onChunk)
     }
 
     func cancelGeneration() {
