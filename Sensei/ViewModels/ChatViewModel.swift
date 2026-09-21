@@ -26,6 +26,7 @@ final class ChatViewModel: ObservableObject {
     private var lastProgressSample: (date: Date, progress: Double)?
     private var downloadObserver: NSObjectProtocol?
     private var downloadFinishObserver: NSObjectProtocol?
+    private var generationTask: Task<Void, Never>?
 
     init() {
         if let raw = UserDefaults.standard.string(forKey: "sensei.selectedModel"),
@@ -249,7 +250,7 @@ final class ChatViewModel: ObservableObject {
         benchmarkError = nil
         benchmarkResult = nil
 
-        Task {
+        generationTask = Task {
             let operationID = UUID().uuidString
             SenseiDiagnostics.shared.record(
                 operationID: operationID,
@@ -370,7 +371,22 @@ final class ChatViewModel: ObservableObject {
             }
 
             isThinking = false
+            generationTask = nil
         }
+    }
+
+    func stopThinking() {
+        guard isThinking else { return }
+        generationTask?.cancel()
+        generationTask = nil
+        ai.cancelGeneration()
+        isThinking = false
+        SenseiDiagnostics.shared.record(
+            model: loadedModel?.name,
+            stage: "GENERATION_CANCELLED",
+            message: "User stopped local generation.",
+            level: "INFO"
+        )
     }
 
     func clearConversation() {
