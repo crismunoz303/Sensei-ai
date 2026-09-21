@@ -111,6 +111,25 @@ final class SenseiMemoryStore: ObservableObject {
             .map(\.0)
     }
 
+    func explicitTeaching(from input: String) -> (kind: SenseiMemory.Kind, text: String)? {
+        let trimmed = input.trimmingCharacters(in: .whitespacesAndNewlines)
+        let lower = trimmed.lowercased()
+        let commands: [(String, SenseiMemory.Kind)] = [
+            ("remember that ", .fact),
+            ("remember ", .fact),
+            ("my preference is ", .preference),
+            ("correction: ", .correction),
+            ("always remember that ", .instruction)
+        ]
+
+        for (prefix, kind) in commands where lower.hasPrefix(prefix) {
+            let start = trimmed.index(trimmed.startIndex, offsetBy: prefix.count)
+            let value = String(trimmed[start...]).trimmingCharacters(in: .whitespacesAndNewlines)
+            if !value.isEmpty { return (kind, value) }
+        }
+        return nil
+    }
+
     func context(for prompt: String, limit: Int = 8) -> String? {
         let relevant = relevantMemories(for: prompt, limit: limit)
         guard !relevant.isEmpty else { return nil }
