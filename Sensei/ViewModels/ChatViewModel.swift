@@ -288,7 +288,7 @@ final class ChatViewModel: ObservableObject {
             }
             defer { stallWatch.cancel() }
             do {
-                benchmarkResult = try await ai.benchmarkCurrent(loadSeconds: lastLoadSeconds)
+                benchmarkResult = try await ai.benchmarkCurrent(loadSeconds: lastLoadSeconds, operationID: operationID)
                 SenseiDiagnostics.shared.record(
                     operationID: operationID,
                     model: loadedModel?.name,
@@ -379,7 +379,7 @@ final class ChatViewModel: ObservableObject {
         draft = ""
         append(ChatMessage(role: .user, text: prompt))
         isThinking = true
-        thinkingStatus = "Understanding your request…"
+        thinkingStatus = "Starting local generation…"
 
         // Progress is rendered separately. Do not create a fake "Thinking…" chat
         // message; the assistant bubble appears only when a real answer is available.
@@ -398,27 +398,17 @@ final class ChatViewModel: ObservableObject {
 
             var streamedText = ""
             var receivedFirstChunk = false
-            var reasoningChunkCount = 0
+
 
             do {
                 _ = try await ai.reply(to: prompt) { chunk in
                     guard !chunk.isEmpty, !Task.isCancelled else { return }
 
                     streamedText += chunk
-                    reasoningChunkCount += 1
-
-                    // High-level activity only: never reveal the model's raw
-                    // chain-of-thought. This gives the user useful feedback
-                    // similar to a processing status while SENSEI works.
-                    if streamedText.range(of: "</think>", options: .caseInsensitive) == nil {
-                        if reasoningChunkCount < 8 {
-                            self.thinkingStatus = "Understanding your request…"
-                        } else if reasoningChunkCount < 24 {
-                            self.thinkingStatus = "Working through it…"
-                        } else {
-                            self.thinkingStatus = "Preparing the answer…"
-                        }
-                    } else {
+                    // Report only observable runtime state. Do not invent a
+                    // semantic description of the model's private reasoning.
+                    self.thinkingStatus = "Generating locally…"
+                    if streamedText.range(of: "</think>", options: .caseInsensitive) != nil {
                         self.thinkingStatus = "Writing response…"
                     }
 
@@ -445,7 +435,7 @@ final class ChatViewModel: ObservableObject {
                             operationID: operationID,
                             model: self.loadedModel?.name,
                             stage: "GENERATION_FIRST_CHUNK",
-                            message: "First streamed text is visible in chat.",
+                            message: "First generation chunk received. It may remain private until a safe final-answer boundary is available.",
                             level: "SUCCESS"
                         )
                     }
