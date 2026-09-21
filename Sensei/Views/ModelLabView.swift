@@ -91,6 +91,37 @@ struct ModelLabView: View {
                 .font(.caption2)
                 .foregroundStyle(.secondary)
 
+            if drive.isBackingUp {
+                ProgressView(value: drive.backupProgress)
+                    .tint(.red)
+                Text("\(Int(drive.backupProgress * 100))% uploaded")
+                    .font(.caption2.monospaced())
+                    .foregroundStyle(.secondary)
+            }
+
+            if drive.isSignedIn && chat.modelDownloadReady {
+                Button {
+                    Task {
+                        do {
+                            try await drive.retryBackup(chat.selectedModel)
+                        } catch {
+                            // Manager publishes the failure state and keeps retry available.
+                        }
+                    }
+                } label: {
+                    HStack {
+                        Image(systemName: "arrow.clockwise.icloud")
+                        Text(drive.status == "BACKUP FAILED" ? "RETRY BACKUP" : "BACK UP DOWNLOADED MODEL")
+                            .fontWeight(.bold)
+                    }
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 11)
+                    .foregroundStyle(.white)
+                    .background(.white.opacity(0.09), in: RoundedRectangle(cornerRadius: 14))
+                }
+                .disabled(drive.isBackingUp)
+            }
+
             Button {
                 Task {
                     if drive.isSignedIn {
@@ -199,9 +230,16 @@ struct ModelLabView: View {
                     .tint(.red)
 
                 HStack {
-                    Text("\(Int(chat.modelProgress * 100))%")
-                        .font(.caption2.monospaced())
-                        .foregroundStyle(.secondary)
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("\(Int(chat.modelProgress * 100))%")
+                            .font(.caption2.monospaced())
+                            .foregroundStyle(.secondary)
+                        if let eta = chat.downloadETA {
+                            Text(eta)
+                                .font(.caption2.monospaced())
+                                .foregroundStyle(.secondary)
+                        }
+                    }
 
                     Spacer()
 
