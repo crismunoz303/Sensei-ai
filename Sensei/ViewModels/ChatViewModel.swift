@@ -304,6 +304,34 @@ final class ChatViewModel: ObservableObject {
         return minutes > 0 ? "~\(hours)h \(minutes)m remaining" : "~\(hours)h remaining"
     }
 
+    private static func compactStreamDisplay(_ raw: String) -> String {
+        let answerMarkers = ["Answer:", "Final Answer:", "Final:"]
+        for marker in answerMarkers {
+            if let range = raw.range(of: marker, options: .caseInsensitive) {
+                let prefix = String(raw[..<range.lowerBound])
+                let answer = String(raw[range.lowerBound...])
+                let thinkingLine = prefix
+                    .split(whereSeparator: { $0.isNewline })
+                    .map(String.init)
+                    .first(where: { $0.localizedCaseInsensitiveContains("Thinking:") })
+
+                if let thinkingLine {
+                    let compactThinking = String(thinkingLine.prefix(140))
+                    return compactThinking + "\n" + answer
+                }
+                return answer
+            }
+        }
+
+        // While the model is still producing its pre-answer text, keep the
+        // live bubble bounded so SwiftUI does not continuously lay out a huge
+        // growing reasoning transcript.
+        if raw.count > 180 {
+            return String(raw.prefix(180)) + "…"
+        }
+        return raw
+    }
+
     func send() {
         let prompt = draft.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !prompt.isEmpty, !isThinking else { return }
@@ -352,11 +380,12 @@ final class ChatViewModel: ObservableObject {
                     guard !chunk.isEmpty, !Task.isCancelled else { return }
 
                     streamedText += chunk
+                    let visibleText = Self.compactStreamDisplay(streamedText)
                     if let index = self.messages.firstIndex(where: { $0.id == responseID }) {
                         self.messages[index] = ChatMessage(
                             id: responseID,
                             role: .assistant,
-                            text: streamedText,
+                            text: visibleText,
                             createdAt: responseCreatedAt
                         )
                     }
