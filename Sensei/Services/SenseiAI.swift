@@ -15,7 +15,11 @@ private final class SenseiSessionBox: @unchecked Sendable {
     let session: ChatSession
 
     init(container: ModelContainer, instructions: String) {
-        self.session = ChatSession(\n            container,\n            instructions: instructions,\n            generateParameters: GenerateParameters(maxTokens: 512)\n        )
+        self.session = ChatSession(
+            container,
+            instructions: instructions,
+            generateParameters: GenerateParameters(maxTokens: 512)
+        )
     }
 
     func respond(
