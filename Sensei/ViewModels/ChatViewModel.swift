@@ -164,10 +164,13 @@ final class ChatViewModel: ObservableObject {
         modelStatusDetail = "Loading \(model.name) into memory…"
         benchmarkError = nil
 
+        let operationID = SenseiDiagnostics.shared.beginModelLoad(model: model)
+
         Task {
             do {
                 let loadSeconds = try await ai.load(
                     model: model,
+                    operationID: operationID,
                     progressHandler: { [weak self] progress in
                         self?.modelProgress = progress
                     }
@@ -176,9 +179,18 @@ final class ChatViewModel: ObservableObject {
                 lastLoadSeconds = loadSeconds
                 loadedModel = model
                 modelDownloadReady = true
+                SenseiDiagnostics.shared.completeModelLoad(
+                    operationID: operationID,
+                    model: model
+                )
                 statusText = "LOCAL"
                 modelStatusDetail = "\(model.name) is loaded locally."
             } catch {
+                SenseiDiagnostics.shared.failModelLoad(
+                    operationID: operationID,
+                    model: model,
+                    error: error
+                )
                 loadedModel = nil
                 statusText = "ERROR"
                 modelStatusDetail = error.localizedDescription
