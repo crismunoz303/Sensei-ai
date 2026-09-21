@@ -52,6 +52,7 @@ final class SenseiAI {
 
     func load(
         model: LocalModelOption,
+        operationID: String,
         progressHandler: @escaping @MainActor @Sendable (Double) -> Void
     ) async throws -> Double {
         if loadedModel == model, container != nil, sessionBox != nil {
@@ -59,11 +60,25 @@ final class SenseiAI {
             return 0
         }
 
+        SenseiDiagnostics.shared.checkpoint(
+            operationID: operationID,
+            model: model,
+            stage: "VERIFYING_MODEL_FILES",
+            message: "Checking downloaded model files."
+        )
+
         guard let directory =
             BackgroundModelDownloadManager.shared.readyModelDirectory(for: model)
         else {
             throw SenseiAIError.modelNotDownloaded
         }
+
+        SenseiDiagnostics.shared.checkpoint(
+            operationID: operationID,
+            model: model,
+            stage: "MODEL_FILES_VERIFIED",
+            message: "Downloaded model directory is complete."
+        )
 
         // Apply the low-cache policy before any Qwen3.5 runtime preparation.
         // The first 9B load may read and rewrite bounded safetensor batches, so
@@ -71,14 +86,33 @@ final class SenseiAI {
         MLX.Memory.clearCache()
         MLX.Memory.cacheLimit = 20 * 1024 * 1024
 
+        SenseiDiagnostics.shared.checkpoint(
+            operationID: operationID,
+            model: model,
+            stage: "MLX_CACHE_CONFIGURED",
+            message: "MLX cache cleared and reusable cache limited to 20 MB."
+        )
+
         let loadDirectory: URL
         if model == .qwen35_9b {
+            SenseiDiagnostics.shared.checkpoint(
+                operationID: operationID,
+                model: model,
+                stage: "TEXT_RUNTIME_PREPARATION_STARTED",
+                message: "Preparing/reusing the Qwen3.5 language-only runtime."
+            )
             // The downloaded Qwen3.5 9B archive is a unified vision-language
             // checkpoint. Build/reuse a language-only runtime checkpoint so
             // MLX never materializes the unused vision tower during LLM load.
             loadDirectory = try await Qwen35TextRuntimePreparer.prepare(
                 from: directory,
                 progressHandler: progressHandler
+            )
+            SenseiDiagnostics.shared.checkpoint(
+                operationID: operationID,
+                model: model,
+                stage: "TEXT_RUNTIME_READY",
+                message: "Language-only runtime is ready."
             )
         } else {
             loadDirectory = directory
@@ -90,9 +124,23 @@ final class SenseiAI {
 
         let started = Date()
 
+        SenseiDiagnostics.shared.checkpoint(
+            operationID: operationID,
+            model: model,
+            stage: "MLX_CONTAINER_LOAD_STARTED",
+            message: "Entering MLX LLMModelFactory.loadContainer."
+        )
+
         let loaded = try await LLMModelFactory.shared.loadContainer(
             from: loadDirectory,
             using: #huggingFaceTokenizerLoader()
+        )
+
+        SenseiDiagnostics.shared.checkpoint(
+            operationID: operationID,
+            model: model,
+            stage: "MLX_CONTAINER_LOADED",
+            message: "MLX model container returned successfully."
         )
 
         let newSessionBox = SenseiSessionBox(
@@ -103,6 +151,13 @@ final class SenseiAI {
         container = loaded
         sessionBox = newSessionBox
         loadedModel = model
+
+        SenseiDiagnostics.shared.checkpoint(
+            operationID: operationID,
+            model: model,
+            stage: "CHAT_SESSION_READY",
+            message: "Local ChatSession initialized."
+        )
 
         await progressHandler(1.0)
         return Date().timeIntervalSince(started)
