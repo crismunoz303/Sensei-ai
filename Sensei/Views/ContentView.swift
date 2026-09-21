@@ -92,6 +92,16 @@ struct ContentView: View {
                                 .font(.footnote)
                                 .foregroundStyle(.secondary)
                             Spacer()
+                            Button {
+                                chat.stopThinking()
+                            } label: {
+                                Label("STOP", systemImage: "stop.fill")
+                                    .font(.caption2.monospaced().weight(.bold))
+                                    .foregroundStyle(.red)
+                                    .padding(.horizontal, 10)
+                                    .padding(.vertical, 7)
+                                    .background(.red.opacity(0.12), in: Capsule())
+                            }
                         }
                         .padding(.horizontal, 18)
                     }
