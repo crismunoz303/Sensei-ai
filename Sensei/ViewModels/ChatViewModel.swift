@@ -475,7 +475,24 @@ final class ChatViewModel: ObservableObject {
                     modelPrompt = prompt
                 }
 
-                _ = try await ai.reply(to: modelPrompt) { chunk in
+                if collaborationMode && collaborationAvailable {
+                    thinkingStatus = "SENSEI TEAM is collaborating…"
+                    let teamAnswer = try await ai.collaborativeReply(
+                        to: modelPrompt,
+                        models: downloadedModels
+                    )
+                    streamedText = teamAnswer
+                    receivedFirstChunk = true
+                    thinkingStatus = "Writing response…"
+                    SenseiDiagnostics.shared.record(
+                        operationID: operationID,
+                        model: loadedModel?.name,
+                        stage: "TEAM_CHAT_RESULT_READY",
+                        message: "TEAM mode returned a final-answer candidate to chat.",
+                        level: "SUCCESS"
+                    )
+                } else {
+                    _ = try await ai.reply(to: modelPrompt) { chunk in
                     guard !chunk.isEmpty, !Task.isCancelled else { return }
 
                     streamedText += chunk
@@ -512,6 +529,7 @@ final class ChatViewModel: ObservableObject {
                             message: "First generation chunk received. It may remain private until a safe final-answer boundary is available.",
                             level: "SUCCESS"
                         )
+                    }
                     }
                 }
 
