@@ -332,7 +332,14 @@ struct ModelLabView: View {
                 .foregroundStyle(.white)
                 .background(.white.opacity(0.09), in: RoundedRectangle(cornerRadius: 14))
             }
-            .disabled(chat.isLoadingModel || chat.isDownloadingModel || chat.isThinking || chat.isRunningBenchmark)
+            .disabled(chat.loadedModel != chat.selectedModel || chat.isLoadingModel || chat.isDownloadingModel || chat.isThinking || chat.isRunningBenchmark)
+            .opacity(chat.loadedModel == chat.selectedModel && !chat.isLoadingModel && !chat.isDownloadingModel && !chat.isThinking ? 1 : 0.55)
+
+            if chat.loadedModel != chat.selectedModel && !chat.isLoadingModel {
+                Text("Load (chat.selectedModel.name) before running the test.")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+            }
 
             if chat.isRunningBenchmark {
                 HStack(spacing: 8) {
