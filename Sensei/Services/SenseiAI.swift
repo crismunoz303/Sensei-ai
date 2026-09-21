@@ -18,7 +18,8 @@ private final class SenseiSessionBox: @unchecked Sendable {
         self.session = ChatSession(
             container,
             instructions: instructions,
-            generateParameters: GenerateParameters(maxTokens: 512)
+            generateParameters: GenerateParameters(maxTokens: 512),
+            additionalContext: ["enable_thinking": false]
         )
     }
 
@@ -242,7 +243,8 @@ final class SenseiAI {
         let benchmarkSession = ChatSession(
             container,
             instructions: benchmarkInstructions,
-            generateParameters: GenerateParameters(maxTokens: 512)
+            generateParameters: GenerateParameters(maxTokens: 512),
+            additionalContext: ["enable_thinking": false]
         )
 
         let prompt = """
