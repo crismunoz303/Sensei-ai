@@ -178,7 +178,6 @@ final class SenseiAI {
 enum SenseiAIError: LocalizedError {
     case noModelLoaded
     case modelNotDownloaded
-    case nineBUnsafeOnThisDevice(detectedBytes: UInt64)
 
     var errorDescription: String? {
         switch self {
