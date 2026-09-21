@@ -4,6 +4,7 @@ struct ModelLabView: View {
     @EnvironmentObject private var chat: ChatViewModel
     @Environment(\.dismiss) private var dismiss
     @StateObject private var drive = GoogleDriveBackupManager.shared
+    @State private var showDiagnostics = false
 
     var body: some View {
         NavigationStack {
@@ -24,6 +25,15 @@ struct ModelLabView: View {
             .navigationTitle("MODEL LAB")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
+                ToolbarItem(placement: .topBarLeading) {
+                    Button {
+                        showDiagnostics = true
+                    } label: {
+                        Label("Errors", systemImage: "exclamationmark.triangle")
+                    }
+                    .foregroundStyle(.red)
+                }
+
                 ToolbarItem(placement: .topBarTrailing) {
                     Button("Done") {
                         dismiss()
@@ -33,6 +43,10 @@ struct ModelLabView: View {
             }
             .task {
                 chat.refreshDownloadState()
+            }
+            .sheet(isPresented: $showDiagnostics) {
+                DiagnosticsView()
+                    .preferredColorScheme(.dark)
             }
 
         }
