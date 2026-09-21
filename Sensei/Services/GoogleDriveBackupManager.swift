@@ -10,6 +10,8 @@ final class GoogleDriveBackupManager: ObservableObject {
     @Published private(set) var accountEmail: String?
     @Published private(set) var status = "NOT CONNECTED"
     @Published private(set) var detail = "Sign in once to let SENSEI back up completed models automatically."
+    @Published private(set) var isBackingUp = false
+    @Published private(set) var backupProgress: Double = 0
 
     private let scope = "https://www.googleapis.com/auth/drive.file"
     private let clientID = "934355792148-tlle93u7lt07l9vmj9kpttdfonk3lrer.apps.googleusercontent.com"
@@ -55,12 +57,17 @@ final class GoogleDriveBackupManager: ObservableObject {
 
     func backUpModel(_ model: LocalModelOption, directory: URL) async throws {
         guard let user = GIDSignIn.sharedInstance.currentUser else {
+            status = "SIGN IN NEEDED"
+            detail = DriveBackupError.notSignedIn.localizedDescription
             throw DriveBackupError.notSignedIn
         }
 
+        isBackingUp = true
+        backupProgress = 0
         status = "BACKING UP"
-        detail = "Uploading \(model.name) to Google Drive…"
+        detail = "Preparing \(model.name) for Google Drive…"
 
+        do {
         let token = try await refreshedAccessToken(for: user)
         let folderID = try await ensureFolder(accessToken: token)
         let files = try FileManager.default.subpathsOfDirectory(atPath: directory.path)
@@ -70,13 +77,37 @@ final class GoogleDriveBackupManager: ObservableObject {
                 return FileManager.default.fileExists(atPath: url.path, isDirectory: &isDirectory) && !isDirectory.boolValue
             }
 
+        let totalBytes = max(files.reduce(Int64(0)) { partial, file in
+            partial + ((try? file.resourceValues(forKeys: [.fileSizeKey]).fileSize).map(Int64.init) ?? 0)
+        }, 1)
+        var uploadedBytes: Int64 = 0
+
         for file in files {
             let relative = file.path.replacingOccurrences(of: directory.path + "/", with: "")
+            let size = (try? file.resourceValues(forKeys: [.fileSizeKey]).fileSize).map(Int64.init) ?? 0
+            detail = "Uploading \(model.name)… \(Int(backupProgress * 100))%"
             try await uploadResumable(file: file, name: model.rawValue + "/" + relative, parentID: folderID, accessToken: token)
+            uploadedBytes += size
+            backupProgress = min(1, Double(uploadedBytes) / Double(totalBytes))
         }
 
+        backupProgress = 1
+        isBackingUp = false
         status = "BACKED UP"
         detail = "\(model.name) is backed up to Google Drive."
+        } catch {
+            isBackingUp = false
+            status = "BACKUP FAILED"
+            detail = error.localizedDescription
+            throw error
+        }
+    }
+
+    func retryBackup(_ model: LocalModelOption) async throws {
+        guard let directory = BackgroundModelDownloadManager.shared.readyModelDirectory(for: model) else {
+            throw DriveBackupError.modelNotAvailable
+        }
+        try await backUpModel(model, directory: directory)
     }
 
     private func apply(_ user: GIDGoogleUser) {
@@ -177,7 +208,7 @@ final class GoogleDriveBackupManager: ObservableObject {
 }
 
 enum DriveBackupError: LocalizedError {
-    case noPresenter, notSignedIn, tokenRefreshFailed, invalidResponse, requestFailed
+    case noPresenter, notSignedIn, tokenRefreshFailed, invalidResponse, requestFailed, modelNotAvailable
     var errorDescription: String? {
         switch self {
         case .noPresenter: "SENSEI could not open Google sign-in."
@@ -185,6 +216,7 @@ enum DriveBackupError: LocalizedError {
         case .tokenRefreshFailed: "Google sign-in needs to be refreshed."
         case .invalidResponse: "Google Drive returned an invalid response."
         case .requestFailed: "Google Drive request failed."
+        case .modelNotAvailable: "The completed local model could not be found on this iPhone."
         }
     }
 }
