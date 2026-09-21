@@ -305,8 +305,23 @@ final class ChatViewModel: ObservableObject {
     }
 
     private static func compactStreamDisplay(_ raw: String) -> String {
-        // Never render model scratch work. Qwen variants may emit reasoning
-        // before a final-answer marker even when instructed not to.
+        // Qwen may stream raw reasoning inside <think>...</think>. Never expose
+        // that content. The UI owns the progress indicator.
+        if let close = raw.range(of: "</think>", options: .caseInsensitive) {
+            let answer = raw[close.upperBound...]
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            return answer.isEmpty ? "Thinking…" : answer
+        }
+
+        // If an opening think tag exists without its closing tag, generation
+        // is still inside private reasoning.
+        if raw.range(of: "<think>", options: .caseInsensitive) != nil {
+            return "Thinking…"
+        }
+
+        // Some model/template combinations omit the opening tag but still end
+        // private reasoning with </think>. Until a final answer is clearly
+        // available, keep all streamed preamble private.
         let answerMarkers = ["Answer:", "Final Answer:", "Final:"]
         for marker in answerMarkers {
             if let range = raw.range(of: marker, options: .caseInsensitive) {
@@ -314,13 +329,6 @@ final class ChatViewModel: ObservableObject {
                     .trimmingCharacters(in: .whitespacesAndNewlines)
                 return answer.isEmpty ? "Thinking…" : answer
             }
-        }
-
-        // Common Qwen think-tag format: only reveal text after </think>.
-        if let range = raw.range(of: "</think>", options: .caseInsensitive) {
-            let answer = raw[range.upperBound...]
-                .trimmingCharacters(in: .whitespacesAndNewlines)
-            return answer.isEmpty ? "Thinking…" : answer
         }
 
         return "Thinking…"
@@ -397,6 +405,15 @@ final class ChatViewModel: ObservableObject {
                 }
 
                 try Task.checkCancellation()
+                let finalVisibleText = Self.compactStreamDisplay(streamedText)
+                if let index = messages.firstIndex(where: { $0.id == responseID }) {
+                    messages[index] = ChatMessage(
+                        id: responseID,
+                        role: .assistant,
+                        text: finalVisibleText,
+                        createdAt: responseCreatedAt
+                    )
+                }
                 store.save(messages)
                 SenseiDiagnostics.shared.record(
                     operationID: operationID,
