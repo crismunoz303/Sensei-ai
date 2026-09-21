@@ -89,7 +89,12 @@ struct DiagnosticsView: View {
                     }
                     .foregroundStyle(.red)
                 }
-                ToolbarItem(placement: .topBarTrailing) {
+                ToolbarItemGroup(placement: .topBarTrailing) {
+                    ShareLink(item: diagnostics.exportReportURL) {
+                        Image(systemName: "square.and.arrow.up")
+                    }
+                    .foregroundStyle(.red)
+
                     Button("Done") {
                         dismiss()
                     }
