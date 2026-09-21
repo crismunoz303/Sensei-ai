@@ -129,6 +129,43 @@ final class SenseiDiagnostics: ObservableObject {
         persistEvents()
     }
 
+    /// Complete, untruncated text report for debugging/export.
+    /// Chat response limits never apply to this file.
+    var exportReportURL: URL {
+        writeExportReport()
+        return diagnosticsDirectory.appendingPathComponent("SENSEI-Diagnostic-Report.txt")
+    }
+
+    private func writeExportReport() {
+        var lines: [String] = [
+            "SENSEI DIAGNOSTIC REPORT",
+            "Generated: \(ISO8601DateFormatter().string(from: Date()))",
+            "Events: \(events.count)",
+            ""
+        ]
+
+        for event in events.reversed() {
+            lines.append("------------------------------------------------------------")
+            lines.append("TIME: \(ISO8601DateFormatter().string(from: event.timestamp))")
+            lines.append("LEVEL: \(event.level)")
+            lines.append("STAGE: \(event.stage)")
+            if let operationID = event.operationID { lines.append("OPERATION: \(operationID)") }
+            if let model = event.model { lines.append("MODEL: \(model)") }
+            if let bytes = event.residentMemoryBytes {
+                lines.append(String(format: "RESIDENT_MEMORY_GB: %.3f", Double(bytes) / 1_000_000_000))
+            }
+            lines.append("MESSAGE:")
+            lines.append(event.message)
+            lines.append("")
+        }
+
+        try? lines.joined(separator: "\n").write(
+            to: diagnosticsDirectory.appendingPathComponent("SENSEI-Diagnostic-Report.txt"),
+            atomically: true,
+            encoding: .utf8
+        )
+    }
+
     func clear() {
         events = []
         suspectedInterruptedLoad = nil
