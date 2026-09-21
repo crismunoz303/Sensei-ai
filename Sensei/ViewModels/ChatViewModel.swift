@@ -120,15 +120,17 @@ final class ChatViewModel: ObservableObject {
                     let rate = delta / elapsed
                     let seconds = (1 - snapshot.progress) / rate
                     downloadETA = Self.formatETA(seconds)
+                    lastProgressSample = (now, snapshot.progress)
                 } else if downloadETA == nil {
                     downloadETA = "Calculating…"
                 }
             } else if snapshot.isDownloading {
                 downloadETA = "Calculating…"
+                lastProgressSample = (now, snapshot.progress)
             } else {
                 downloadETA = nil
+                lastProgressSample = nil
             }
-            lastProgressSample = snapshot.isDownloading ? (now, snapshot.progress) : nil
             modelProgress = snapshot.progress
             isDownloadingModel = snapshot.isDownloading
             modelDownloadReady = snapshot.isReady
