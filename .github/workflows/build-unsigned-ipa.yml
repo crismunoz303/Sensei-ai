@@ -3,7 +3,7 @@ name: Build SENSEI unsigned IPA
 on:
   workflow_dispatch:
   push:
-    branches: [ main, sensei-local-persistence-drive, sensei-next-revision ]
+    branches: [ main, sensei-local-persistence-drive, sensei-next-revision, sensei-v14-learning ]
   pull_request:
     branches: [ main ]
 
