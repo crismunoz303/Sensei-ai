@@ -229,7 +229,7 @@ final class SenseiAI {
         return raw.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
-    func benchmarkCurrent(loadSeconds: Double = 0) async throws -> ModelBenchmarkSnapshot {
+    func benchmarkCurrent(loadSeconds: Double = 0, operationID: String? = nil) async throws -> ModelBenchmarkSnapshot {
         guard let container, let model = loadedModel else {
             throw SenseiAIError.noModelLoaded
         }
@@ -242,7 +242,7 @@ final class SenseiAI {
         let benchmarkSession = ChatSession(
             container,
             instructions: benchmarkInstructions,
-            generateParameters: GenerateParameters(maxTokens: 96)
+            generateParameters: GenerateParameters(maxTokens: 512)
         )
 
         let prompt = """
@@ -256,6 +256,17 @@ final class SenseiAI {
 
         let started = Date()
         let rawResponse = try await benchmarkSession.respond(to: prompt)
+
+        // Preserve the complete captured benchmark output in diagnostics. This is
+        // deliberately separate from what normal chat is allowed to display.
+        SenseiDiagnostics.shared.record(
+            operationID: operationID,
+            model: model.name,
+            stage: "BENCHMARK_RAW_OUTPUT",
+            message: rawResponse,
+            level: "INFO"
+        )
+
         let response = Self.finalAnswer(from: rawResponse)
         let responseSeconds = Date().timeIntervalSince(started)
 
