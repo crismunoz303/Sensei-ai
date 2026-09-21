@@ -5,6 +5,7 @@ final class ChatViewModel: ObservableObject {
     @Published var messages: [ChatMessage]
     @Published var draft = ""
     @Published var isThinking = false
+    @Published var thinkingStatus = "Thinking…"
 
     @Published var selectedModel: LocalModelOption
     @Published var loadedModel: LocalModelOption?
@@ -351,6 +352,7 @@ final class ChatViewModel: ObservableObject {
         draft = ""
         append(ChatMessage(role: .user, text: prompt))
         isThinking = true
+        thinkingStatus = "Understanding your request…"
 
         // Create the assistant bubble immediately and mutate it as MLX streams
         // chunks. The user sees output as soon as the first token arrives.
@@ -376,12 +378,30 @@ final class ChatViewModel: ObservableObject {
 
             var streamedText = ""
             var receivedFirstChunk = false
+            var reasoningChunkCount = 0
 
             do {
                 _ = try await ai.reply(to: prompt) { chunk in
                     guard !chunk.isEmpty, !Task.isCancelled else { return }
 
                     streamedText += chunk
+                    reasoningChunkCount += 1
+
+                    // High-level activity only: never reveal the model's raw
+                    // chain-of-thought. This gives the user useful feedback
+                    // similar to a processing status while SENSEI works.
+                    if streamedText.range(of: "</think>", options: .caseInsensitive) == nil {
+                        if reasoningChunkCount < 8 {
+                            self.thinkingStatus = "Understanding your request…"
+                        } else if reasoningChunkCount < 24 {
+                            self.thinkingStatus = "Working through it…"
+                        } else {
+                            self.thinkingStatus = "Preparing the answer…"
+                        }
+                    } else {
+                        self.thinkingStatus = "Writing response…"
+                    }
+
                     let visibleText = Self.compactStreamDisplay(streamedText)
                     if let index = self.messages.firstIndex(where: { $0.id == responseID }) {
                         self.messages[index] = ChatMessage(
