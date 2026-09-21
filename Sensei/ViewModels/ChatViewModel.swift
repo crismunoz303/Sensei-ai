@@ -19,6 +19,7 @@ final class ChatViewModel: ObservableObject {
     @Published var benchmarkResult: ModelBenchmarkSnapshot?
     @Published var benchmarkError: String?
     @Published var isRunningBenchmark = false
+    @Published var collaborationMode = false
 
     private let ai = SenseiAI.shared
     private let downloads = BackgroundModelDownloadManager.shared
@@ -29,6 +30,14 @@ final class ChatViewModel: ObservableObject {
     private var downloadObserver: NSObjectProtocol?
     private var downloadFinishObserver: NSObjectProtocol?
     private var generationTask: Task<Void, Never>?
+
+    var downloadedModels: [LocalModelOption] {
+        LocalModelOption.allCases.filter { downloads.isModelReady($0) }
+    }
+
+    var collaborationAvailable: Bool {
+        downloadedModels.count > 1
+    }
 
     init() {
         if let raw = UserDefaults.standard.string(forKey: "sensei.selectedModel"),
