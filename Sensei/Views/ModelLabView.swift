@@ -94,9 +94,17 @@ struct ModelLabView: View {
             if drive.isBackingUp {
                 ProgressView(value: drive.backupProgress)
                     .tint(.red)
-                Text("\(Int(drive.backupProgress * 100))% uploaded")
-                    .font(.caption2.monospaced())
-                    .foregroundStyle(.secondary)
+                HStack {
+                    Text("\(Int(drive.backupProgress * 100))% uploaded")
+                        .font(.caption2.monospaced())
+                        .foregroundStyle(.secondary)
+                    Spacer()
+                    if let eta = drive.backupETA {
+                        Text(eta)
+                            .font(.caption2.monospaced())
+                            .foregroundStyle(.secondary)
+                    }
+                }
             }
 
             if drive.isSignedIn && chat.modelDownloadReady {
