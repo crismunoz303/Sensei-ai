@@ -80,7 +80,16 @@ final class ChatViewModel: ObservableObject {
                 guard drive.isSignedIn,
                       let directory = BackgroundModelDownloadManager.shared.readyModelDirectory(for: model)
                 else { return }
-                try? await drive.backUpModel(model, directory: directory)
+                do {
+                    try await drive.backUpModel(model, directory: directory)
+                } catch {
+                    SenseiDiagnostics.shared.record(
+                        model: model.name,
+                        stage: "DRIVE_BACKUP_ERROR",
+                        message: error.localizedDescription,
+                        level: "ERROR"
+                    )
+                }
             }
         }
 
