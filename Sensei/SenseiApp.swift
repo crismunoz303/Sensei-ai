@@ -52,6 +52,7 @@ struct SenseiApp: App {
                         BackgroundModelDownloadManager.shared.beginBackgroundHandoff()
                     case .active:
                         BackgroundModelDownloadManager.shared.endBackgroundHandoff()
+                        chat.restoreSelectedModelIfNeeded()
                     default:
                         break
                     }
