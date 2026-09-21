@@ -322,7 +322,7 @@ final class ChatViewModel: ObservableObject {
         append(ChatMessage(role: .user, text: prompt))
         isThinking = true
 
-        Task {
+        generationTask = Task {
             let operationID = UUID().uuidString
             SenseiDiagnostics.shared.record(
                 operationID: operationID,
@@ -344,6 +344,7 @@ final class ChatViewModel: ObservableObject {
             defer { stallWatch.cancel() }
             do {
                 let answer = try await ai.reply(to: prompt)
+                try Task.checkCancellation()
                 SenseiDiagnostics.shared.record(
                     operationID: operationID,
                     model: loadedModel?.name,
@@ -353,6 +354,8 @@ final class ChatViewModel: ObservableObject {
                 )
                 append(ChatMessage(role: .assistant, text: answer))
                 statusText = "LOCAL"
+            } catch is CancellationError {
+                // User-requested stop is already recorded by stopThinking().
             } catch {
                 SenseiDiagnostics.shared.record(
                     operationID: operationID,
