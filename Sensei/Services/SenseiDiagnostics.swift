@@ -10,6 +10,42 @@ struct SenseiDiagnosticEvent: Codable, Identifiable {
     let stage: String
     let message: String
     let residentMemoryBytes: UInt64?
+    let thermalState: String?
+    let lowPowerMode: Bool?
+    let systemUptime: TimeInterval?
+
+    enum CodingKeys: String, CodingKey {
+        case id, timestamp, level, operationID, model, stage, message
+        case residentMemoryBytes, thermalState, lowPowerMode, systemUptime
+    }
+
+    init(
+        id: UUID, timestamp: Date, level: String, operationID: String?,
+        model: String?, stage: String, message: String,
+        residentMemoryBytes: UInt64?, thermalState: String? = nil,
+        lowPowerMode: Bool? = nil, systemUptime: TimeInterval? = nil
+    ) {
+        self.id = id; self.timestamp = timestamp; self.level = level
+        self.operationID = operationID; self.model = model; self.stage = stage
+        self.message = message; self.residentMemoryBytes = residentMemoryBytes
+        self.thermalState = thermalState; self.lowPowerMode = lowPowerMode
+        self.systemUptime = systemUptime
+    }
+
+    init(from decoder: Decoder) throws {
+        let x = try decoder.container(keyedBy: CodingKeys.self)
+        id = try x.decode(UUID.self, forKey: .id)
+        timestamp = try x.decode(Date.self, forKey: .timestamp)
+        level = try x.decode(String.self, forKey: .level)
+        operationID = try x.decodeIfPresent(String.self, forKey: .operationID)
+        model = try x.decodeIfPresent(String.self, forKey: .model)
+        stage = try x.decode(String.self, forKey: .stage)
+        message = try x.decode(String.self, forKey: .message)
+        residentMemoryBytes = try x.decodeIfPresent(UInt64.self, forKey: .residentMemoryBytes)
+        thermalState = try x.decodeIfPresent(String.self, forKey: .thermalState)
+        lowPowerMode = try x.decodeIfPresent(Bool.self, forKey: .lowPowerMode)
+        systemUptime = try x.decodeIfPresent(TimeInterval.self, forKey: .systemUptime)
+    }
 }
 
 @MainActor
@@ -22,7 +58,14 @@ final class SenseiDiagnostics: ObservableObject {
     private let fileManager = FileManager.default
     private let encoder: JSONEncoder
     private let decoder: JSONDecoder
-    private let maxEvents = 250
+    private let maxEvents = 500
+    private var thermalObserver: NSObjectProtocol?
+    private var persistenceTask: Task<Void, Never>?
+    private var performanceTask: Task<Void, Never>?
+    private var performanceSessionID: String?
+    private var performanceModel: String?
+    private var performanceMode: String?
+    private var performanceStartedAt: Date?
 
     private init() {
         encoder = JSONEncoder()
@@ -35,6 +78,13 @@ final class SenseiDiagnostics: ObservableObject {
         events = readEvents()
         recoverInterruptedOperationIfNeeded()
         record(stage: "APP_LAUNCHED", message: "SENSEI launched.", level: "INFO")
+        thermalObserver = NotificationCenter.default.addObserver(
+            forName: ProcessInfo.thermalStateDidChangeNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor in self?.captureThermalTransition() }
+        }
     }
 
     var latestSummary: String {
@@ -120,13 +170,69 @@ final class SenseiDiagnostics: ObservableObject {
             model: model,
             stage: stage,
             message: message,
-            residentMemoryBytes: Self.residentMemoryBytes()
+            residentMemoryBytes: Self.residentMemoryBytes(),
+            thermalState: Self.thermalStateName(ProcessInfo.processInfo.thermalState),
+            lowPowerMode: ProcessInfo.processInfo.isLowPowerModeEnabled,
+            systemUptime: ProcessInfo.processInfo.systemUptime
         )
         events.insert(event, at: 0)
         if events.count > maxEvents {
             events = Array(events.prefix(maxEvents))
         }
-        persistEvents()
+        schedulePersistence()
+    }
+
+    func startPerformanceSession(model: String?, mode: String) -> String {
+        stopPerformanceSession(outcome: "REPLACED")
+        let id = UUID().uuidString
+        performanceSessionID = id
+        performanceModel = model
+        performanceMode = mode
+        performanceStartedAt = Date()
+        record(operationID: id, model: model, stage: "PERFORMANCE_SESSION_STARTED",
+               message: "Performance trace started. Mode: \(mode). Thermal, memory, power state and elapsed time will be sampled.",
+               level: "INFO")
+        performanceTask = Task { @MainActor [weak self] in
+            while !Task.isCancelled {
+                try? await Task.sleep(for: .seconds(5))
+                guard !Task.isCancelled, let self, self.performanceSessionID == id else { break }
+                self.recordPerformanceSample()
+            }
+        }
+        return id
+    }
+
+    func markFirstOutput(operationID: String) {
+        guard performanceSessionID == operationID, let start = performanceStartedAt else { return }
+        record(operationID: operationID, model: performanceModel, stage: "FIRST_OUTPUT",
+               message: String(format: "First generated output observed %.3f seconds after the diagnostic session began.", Date().timeIntervalSince(start)),
+               level: "SUCCESS")
+    }
+
+    func stopPerformanceSession(outcome: String) {
+        guard let id = performanceSessionID else { return }
+        performanceTask?.cancel()
+        performanceTask = nil
+        recordPerformanceSample(stage: "PERFORMANCE_FINAL_SAMPLE")
+        let elapsed = performanceStartedAt.map { Date().timeIntervalSince($0) } ?? 0
+        record(operationID: id, model: performanceModel, stage: "PERFORMANCE_SESSION_ENDED",
+               message: String(format: "Performance trace ended after %.2f seconds. Outcome: %@. Mode: %@.", elapsed, outcome, performanceMode ?? "UNKNOWN"),
+               level: outcome == "SUCCESS" ? "SUCCESS" : "INFO")
+        performanceSessionID = nil; performanceModel = nil; performanceMode = nil; performanceStartedAt = nil
+        persistEventsNow()
+    }
+
+    private func recordPerformanceSample(stage: String = "PERFORMANCE_SAMPLE") {
+        guard let id = performanceSessionID else { return }
+        let elapsed = performanceStartedAt.map { Date().timeIntervalSince($0) } ?? 0
+        record(operationID: id, model: performanceModel, stage: stage,
+               message: String(format: "Runtime sample at +%.1fs. Mode: %@.", elapsed, performanceMode ?? "UNKNOWN"))
+    }
+
+    private func captureThermalTransition() {
+        let state = Self.thermalStateName(ProcessInfo.processInfo.thermalState)
+        record(operationID: performanceSessionID, model: performanceModel, stage: "THERMAL_STATE_CHANGED",
+               message: "iOS thermal state changed to \(state).", level: state == "SERIOUS" || state == "CRITICAL" ? "WARNING" : "INFO")
     }
 
     /// Complete, untruncated text report for debugging/export.
@@ -141,7 +247,20 @@ final class SenseiDiagnostics: ObservableObject {
             "SENSEI DIAGNOSTIC REPORT",
             "Generated: \(ISO8601DateFormatter().string(from: Date()))",
             "Events: \(events.count)",
+            "Current thermal state: \(Self.thermalStateName(ProcessInfo.processInfo.thermalState))",
+            "Low Power Mode: \(ProcessInfo.processInfo.isLowPowerModeEnabled ? "ON" : "OFF")",
             ""
+        ]
+
+        let thermalCounts = Dictionary(grouping: events.compactMap { $0.thermalState }, by: { $0 }).mapValues(\.count)
+        let peakMemory = events.compactMap { $0.residentMemoryBytes }.max()
+        lines += [
+            "SESSION SUMMARY",
+            "Thermal samples: \(thermalCounts.sorted { $0.key < $1.key }.map { "\($0.key)=\($0.value)" }.joined(separator: ", "))",
+            peakMemory.map { String(format: "Peak observed resident memory: %.3f GB", Double($0) / 1_000_000_000) } ?? "Peak observed resident memory: unavailable",
+            "Note: correlations in this report are observations; they do not by themselves prove root cause.",
+            ""
+        ]
         ]
 
         for event in events.reversed() {
@@ -154,6 +273,9 @@ final class SenseiDiagnostics: ObservableObject {
             if let bytes = event.residentMemoryBytes {
                 lines.append(String(format: "RESIDENT_MEMORY_GB: %.3f", Double(bytes) / 1_000_000_000))
             }
+            if let thermal = event.thermalState { lines.append("THERMAL_STATE: \(thermal)") }
+            if let lowPower = event.lowPowerMode { lines.append("LOW_POWER_MODE: \(lowPower ? "ON" : "OFF")") }
+            if let uptime = event.systemUptime { lines.append(String(format: "SYSTEM_UPTIME_SECONDS: %.1f", uptime)) }
             lines.append("MESSAGE:")
             lines.append(event.message)
             lines.append("")
@@ -228,7 +350,18 @@ final class SenseiDiagnostics: ObservableObject {
         return decoded
     }
 
-    private func persistEvents() {
+    private func schedulePersistence() {
+        persistenceTask?.cancel()
+        persistenceTask = Task { @MainActor [weak self] in
+            try? await Task.sleep(for: .milliseconds(750))
+            guard !Task.isCancelled else { return }
+            self?.persistEventsNow()
+        }
+    }
+
+    private func persistEvents() { persistEventsNow() }
+
+    private func persistEventsNow() {
         guard let data = try? encoder.encode(events) else { return }
         try? data.write(to: eventsURL, options: [.atomic])
     }
@@ -250,6 +383,16 @@ final class SenseiDiagnostics: ObservableObject {
 
     private var activeOperationURL: URL {
         diagnosticsDirectory.appendingPathComponent("active-model-load.json")
+    }
+
+    private static func thermalStateName(_ state: ProcessInfo.ThermalState) -> String {
+        switch state {
+        case .nominal: return "NOMINAL"
+        case .fair: return "FAIR"
+        case .serious: return "SERIOUS"
+        case .critical: return "CRITICAL"
+        @unknown default: return "UNKNOWN"
+        }
     }
 
     private static func residentMemoryBytes() -> UInt64? {
