@@ -10,6 +10,7 @@ struct ModelLabView: View {
     @State private var reclaimableBytes: Int64 = 0
     @State private var storageMessage: String?
     @State private var isCleaningStorage = false
+    @State private var section: LabSection = .models
 
     var body: some View {
         NavigationStack {
@@ -19,11 +20,8 @@ struct ModelLabView: View {
                 ScrollView {
                     VStack(alignment: .leading, spacing: 18) {
                         intro
-                        drivePanel
-                        storagePanel
-                        modelCards
-                        loadPanel
-                        benchmarkPanel
+                        sectionPicker
+                        sectionContent
                     }
                     .padding(16)
                 }
@@ -67,6 +65,70 @@ struct ModelLabView: View {
                     .preferredColorScheme(.dark)
             }
 
+        }
+    }
+
+    private enum LabSection: String, CaseIterable, Identifiable {
+        case models = "Models"
+        case storage = "Storage"
+        case backup = "Backup"
+        case tools = "Tools"
+        var id: String { rawValue }
+    }
+
+    private var sectionPicker: some View {
+        HStack(spacing: 4) {
+            ForEach(LabSection.allCases) { item in
+                Button {
+                    withAnimation(.easeInOut(duration: 0.18)) {
+                        section = item
+                    }
+                } label: {
+                    Text(item.rawValue.uppercased())
+                        .font(.caption2.monospaced().weight(.bold))
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 9)
+                        .foregroundStyle(section == item ? .white : .secondary)
+                        .background(section == item ? Color.red : Color.clear, in: RoundedRectangle(cornerRadius: 9))
+                }
+            }
+        }
+        .padding(4)
+        .background(.white.opacity(0.06), in: RoundedRectangle(cornerRadius: 13))
+    }
+
+    @ViewBuilder
+    private var sectionContent: some View {
+        switch section {
+        case .models:
+            modelCards
+            loadPanel
+        case .storage:
+            storagePanel
+        case .backup:
+            drivePanel
+        case .tools:
+            benchmarkPanel
+            Button {
+                showMemory = true
+            } label: {
+                Label("MEMORY MANAGER", systemImage: "brain")
+                    .font(.caption.weight(.bold))
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 12)
+                    .foregroundStyle(.white)
+                    .background(.white.opacity(0.07), in: RoundedRectangle(cornerRadius: 14))
+            }
+            Button {
+                showDiagnostics = true
+            } label: {
+                Label("DIAGNOSTICS", systemImage: "waveform.path.ecg")
+                    .font(.caption.weight(.bold))
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 12)
+                    .foregroundStyle(.white)
+                    .background(.white.opacity(0.07), in: RoundedRectangle(cornerRadius: 14))
+            }
         }
     }
 
