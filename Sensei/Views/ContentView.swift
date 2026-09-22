@@ -264,10 +264,18 @@ struct ContentView: View {
                     .submitLabel(.send)
                     .onSubmit {
                         chat.send()
+                        if chat.pendingImageURL == nil {
+                            attachedImageData = nil
+                            photoSelection = nil
+                        }
                     }
 
                 Button {
                     chat.send()
+                    if chat.pendingImageURL == nil {
+                        attachedImageData = nil
+                        photoSelection = nil
+                    }
                 } label: {
                     Image(systemName: "arrow.up")
                         .font(.system(size: 16, weight: .bold))
