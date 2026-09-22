@@ -117,30 +117,7 @@ final class SenseiAI {
             message: "MLX cache cleared and reusable cache limited to 20 MB."
         )
 
-        let loadDirectory: URL
-        if model == .qwen35_9b {
-            SenseiDiagnostics.shared.checkpoint(
-                operationID: operationID,
-                model: model,
-                stage: "TEXT_RUNTIME_PREPARATION_STARTED",
-                message: "Preparing/reusing the Qwen3.5 language-only runtime."
-            )
-            // The downloaded Qwen3.5 9B archive is a unified vision-language
-            // checkpoint. Build/reuse a language-only runtime checkpoint so
-            // MLX never materializes the unused vision tower during LLM load.
-            loadDirectory = try await Qwen35TextRuntimePreparer.prepare(
-                from: directory,
-                progressHandler: progressHandler
-            )
-            SenseiDiagnostics.shared.checkpoint(
-                operationID: operationID,
-                model: model,
-                stage: "TEXT_RUNTIME_READY",
-                message: "Language-only runtime is ready."
-            )
-        } else {
-            loadDirectory = directory
-        }
+        let loadDirectory = directory
 
         sessionBox = nil
         container = nil
