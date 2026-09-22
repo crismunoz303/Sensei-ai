@@ -10,6 +10,7 @@ struct ModelLabView: View {
     @State private var reclaimableBytes: Int64 = 0
     @State private var storageMessage: String?
     @State private var isCleaningStorage = false
+    @State private var isRefreshingStorage = false
     @State private var section: LabSection = .models
     @State private var storageRows: [(model: LocalModelOption, bytes: Int64, ready: Bool)] = []
     @State private var totalModelBytes: Int64 = 0
@@ -353,13 +354,14 @@ struct ModelLabView: View {
                     storageRefreshID = UUID()
                 }
             } label: {
-                Label("REFRESH STORAGE", systemImage: "arrow.clockwise")
+                Label(isRefreshingStorage ? "SCANNING…" : "REFRESH STORAGE", systemImage: "arrow.clockwise")
                     .font(.caption.weight(.bold))
                     .frame(maxWidth: .infinity)
                     .padding(.vertical, 9)
                     .foregroundStyle(.white)
                     .background(.white.opacity(0.09), in: RoundedRectangle(cornerRadius: 12))
             }
+            .disabled(isRefreshingStorage)
         }
         .id(storageRefreshID)
         .padding(14)
@@ -368,6 +370,10 @@ struct ModelLabView: View {
 
     @MainActor
     private func refreshStorage() async {
+        guard !isRefreshingStorage else { return }
+        isRefreshingStorage = true
+        defer { isRefreshingStorage = false }
+
         let manager = BackgroundModelDownloadManager.shared
         let snapshot = await Task.detached(priority: .utility) {
             let rows = manager.storageBreakdown()
