@@ -11,6 +11,9 @@ struct ModelLabView: View {
     @State private var storageMessage: String?
     @State private var isCleaningStorage = false
     @State private var section: LabSection = .models
+    @State private var storageRows: [(model: LocalModelOption, bytes: Int64, ready: Bool)] = []
+    @State private var totalModelBytes: Int64 = 0
+    @State private var orphanedRows: [(name: String, bytes: Int64)] = []
 
     var body: some View {
         NavigationStack {
@@ -54,7 +57,7 @@ struct ModelLabView: View {
             }
             .task {
                 chat.refreshDownloadState()
-                reclaimableBytes = await BackgroundModelDownloadManager.shared.removablePartialBytes()
+                await refreshStorage()
             }
             .sheet(isPresented: $showDiagnostics) {
                 DiagnosticsView()
@@ -235,9 +238,9 @@ struct ModelLabView: View {
     }
 
     private var storagePanel: some View {
-        let rows = BackgroundModelDownloadManager.shared.storageBreakdown()
-        let total = BackgroundModelDownloadManager.shared.modelsRootBytes()
-        let orphaned = BackgroundModelDownloadManager.shared.orphanedModelStorage()
+        let rows = storageRows
+        let total = totalModelBytes
+        let orphaned = orphanedRows
         let orphanedBytes = orphaned.reduce(Int64(0)) { $0 + $1.bytes }
 
         return VStack(alignment: .leading, spacing: 10) {
@@ -324,8 +327,7 @@ struct ModelLabView: View {
                         } catch {
                             storageMessage = error.localizedDescription
                         }
-                        reclaimableBytes = await BackgroundModelDownloadManager.shared.removablePartialBytes()
-                        storageRefreshID = UUID()
+                        await refreshStorage()
                         isCleaningStorage = false
                     }
                 } label: {
@@ -362,6 +364,24 @@ struct ModelLabView: View {
         .id(storageRefreshID)
         .padding(14)
         .background(.white.opacity(0.05), in: RoundedRectangle(cornerRadius: 16))
+    }
+
+    @MainActor
+    private func refreshStorage() async {
+        let manager = BackgroundModelDownloadManager.shared
+        let snapshot = await Task.detached(priority: .utility) {
+            let rows = manager.storageBreakdown()
+            let total = manager.modelsRootBytes()
+            let orphaned = manager.orphanedModelStorage()
+            let reclaimable = await manager.removablePartialBytes()
+            return (rows, total, orphaned, reclaimable)
+        }.value
+
+        storageRows = snapshot.0
+        totalModelBytes = snapshot.1
+        orphanedRows = snapshot.2
+        reclaimableBytes = snapshot.3
+        storageRefreshID = UUID()
     }
 
     private var modelCards: some View {
