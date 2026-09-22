@@ -1,9 +1,12 @@
 import SwiftUI
+import PhotosUI
 
 struct ContentView: View {
     @EnvironmentObject private var chat: ChatViewModel
     @FocusState private var inputFocused: Bool
     @State private var showModelLab = false
+    @State private var photoSelection: PhotosPickerItem?
+    @State private var attachedImageData: Data?
 
     var body: some View {
         NavigationStack {
@@ -120,6 +123,30 @@ struct ContentView: View {
 
     private var composer: some View {
         VStack(spacing: 10) {
+            if let attachedImageData, let image = UIImage(data: attachedImageData) {
+                HStack(spacing: 10) {
+                    Image(uiImage: image)
+                        .resizable()
+                        .scaledToFill()
+                        .frame(width: 54, height: 54)
+                        .clipShape(RoundedRectangle(cornerRadius: 10))
+                    Text("IMAGE ATTACHED")
+                        .font(.caption2.monospaced().weight(.bold))
+                        .foregroundStyle(.secondary)
+                    Spacer()
+                    Button {
+                        chat.removePendingImage()
+                        self.attachedImageData = nil
+                        photoSelection = nil
+                    } label: {
+                        Image(systemName: "xmark.circle.fill")
+                            .foregroundStyle(.red)
+                    }
+                }
+                .padding(8)
+                .background(.white.opacity(0.06), in: RoundedRectangle(cornerRadius: 12))
+            }
+
             VStack(alignment: .leading, spacing: 8) {
                 HStack(spacing: 8) {
                     Button {
@@ -193,6 +220,43 @@ struct ContentView: View {
             }
 
             HStack(spacing: 10) {
+                PhotosPicker(selection: $photoSelection, matching: .images) {
+                    Image(systemName: "photo")
+                        .font(.system(size: 17, weight: .semibold))
+                        .frame(width: 36, height: 36)
+                        .foregroundStyle(.red)
+                        .background(.red.opacity(0.12), in: Circle())
+                }
+                .disabled(chat.isThinking)
+                .onChange(of: photoSelection) {
+                    guard let item = photoSelection else { return }
+                    Task {
+                        do {
+                            guard let data = try await item.loadTransferable(type: Data.self),
+                                  let image = UIImage(data: data),
+                                  let jpeg = image.jpegData(compressionQuality: 0.9)
+                            else { return }
+                            let directory = FileManager.default.temporaryDirectory
+                                .appendingPathComponent("SENSEI-Vision", isDirectory: true)
+                            try FileManager.default.createDirectory(
+                                at: directory,
+                                withIntermediateDirectories: true
+                            )
+                            let url = directory.appendingPathComponent(UUID().uuidString + ".jpg")
+                            try jpeg.write(to: url, options: .atomic)
+                            attachedImageData = jpeg
+                            chat.attachImage(url)
+                        } catch {
+                            SenseiDiagnostics.shared.record(
+                                model: chat.loadedModel?.name,
+                                stage: "IMAGE_ATTACHMENT_ERROR",
+                                message: error.localizedDescription,
+                                level: "ERROR"
+                            )
+                        }
+                    }
+                }
+
                 TextField("Ask SENSEI…", text: $chat.draft, axis: .vertical)
                     .lineLimit(1...5)
                     .textFieldStyle(.plain)
@@ -211,7 +275,10 @@ struct ContentView: View {
                         .foregroundStyle(.white)
                         .background(Color.red, in: Circle())
                 }
-                .disabled(chat.draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || chat.isThinking)
+                .disabled(
+                    (chat.draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && chat.pendingImageURL == nil)
+                    || chat.isThinking
+                )
                 .opacity(chat.isThinking ? 0.5 : 1)
             }
             .padding(10)
