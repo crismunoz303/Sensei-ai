@@ -19,7 +19,7 @@ private final class SenseiSessionBox: @unchecked Sendable {
         self.session = ChatSession(
             container,
             instructions: instructions,
-            generateParameters: GenerateParameters(maxTokens: 512),
+            generateParameters: GenerateParameters(maxTokens: 384),
             additionalContext: ["enable_thinking": false]
         )
     }
@@ -120,9 +120,23 @@ final class SenseiAI {
 
         let loadDirectory = directory
 
+        // Tear the previous runtime down before constructing another multi-GB
+        // model. Clearing again after releasing our strong references gives MLX
+        // a chance to reclaim reusable allocations between SOLO/TEAM/VISION swaps.
         sessionBox = nil
         container = nil
         loadedModel = nil
+        MLX.Memory.clearCache()
+
+        SenseiDiagnostics.shared.checkpoint(
+            operationID: operationID,
+            model: model,
+            stage: "PREVIOUS_RUNTIME_RELEASED",
+            message: "Previous session/container references released and MLX cache cleared before loading the next model."
+        )
+
+        await Task.yield()
+        try Task.checkCancellation()
 
         let started = Date()
 
@@ -287,6 +301,15 @@ final class SenseiAI {
                         level: "WARNING"
                     )
                 }
+            } catch is CancellationError {
+                SenseiDiagnostics.shared.record(
+                    operationID: operationID,
+                    model: reviewer.name,
+                    stage: "TEAM_CANCELLED",
+                    message: "TEAM collaboration was cancelled.",
+                    level: "WARNING"
+                )
+                throw CancellationError()
             } catch {
                 SenseiDiagnostics.shared.record(
                     operationID: operationID,
