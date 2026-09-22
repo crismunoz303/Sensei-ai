@@ -2,6 +2,7 @@ import Foundation
 import MLX
 import MLXHuggingFace
 import MLXLLM
+import MLXVLM
 import MLXLMCommon
 import HuggingFace
 import Tokenizers
@@ -125,17 +126,28 @@ final class SenseiAI {
 
         let started = Date()
 
+        let isVisionModel = model == .qwen25vl_3b
         SenseiDiagnostics.shared.checkpoint(
             operationID: operationID,
             model: model,
             stage: "MLX_CONTAINER_LOAD_STARTED",
-            message: "Entering MLX LLMModelFactory.loadContainer."
+            message: isVisionModel
+                ? "Entering MLX VLMModelFactory.loadContainer."
+                : "Entering MLX LLMModelFactory.loadContainer."
         )
 
-        let loaded = try await LLMModelFactory.shared.loadContainer(
-            from: loadDirectory,
-            using: #huggingFaceTokenizerLoader()
-        )
+        let loaded: ModelContainer
+        if isVisionModel {
+            loaded = try await VLMModelFactory.shared.loadContainer(
+                from: loadDirectory,
+                using: #huggingFaceTokenizerLoader()
+            )
+        } else {
+            loaded = try await LLMModelFactory.shared.loadContainer(
+                from: loadDirectory,
+                using: #huggingFaceTokenizerLoader()
+            )
+        }
 
         SenseiDiagnostics.shared.checkpoint(
             operationID: operationID,
@@ -162,6 +174,28 @@ final class SenseiAI {
 
         await progressHandler(1.0)
         return Date().timeIntervalSince(started)
+    }
+
+    func replyWithImage(
+        to prompt: String,
+        imageURL: URL,
+        onChunk: @escaping @MainActor @Sendable (String) -> Void = { _ in }
+    ) async throws -> String {
+        guard loadedModel == .qwen25vl_3b, let sessionBox else {
+            throw SenseiAIError.visionModelRequired
+        }
+
+        var output = ""
+        for try await chunk in sessionBox.session.streamResponse(
+            to: prompt,
+            images: [.url(imageURL)]
+        ) {
+            try Task.checkCancellation()
+            output += chunk
+            await onChunk(chunk)
+        }
+        try Task.checkCancellation()
+        return output
     }
 
     func reply(
@@ -400,6 +434,7 @@ final class SenseiAI {
 enum SenseiAIError: LocalizedError {
     case noModelLoaded
     case modelNotDownloaded
+    case visionModelRequired
 
     var errorDescription: String? {
         switch self {
@@ -407,6 +442,8 @@ enum SenseiAIError: LocalizedError {
             return "No local SENSEI model is loaded."
         case .modelNotDownloaded:
             return "This SENSEI model has not finished downloading yet."
+        case .visionModelRequired:
+            return "Image analysis requires the downloaded Qwen2.5-VL 3B vision model."
         }
     }
 }
