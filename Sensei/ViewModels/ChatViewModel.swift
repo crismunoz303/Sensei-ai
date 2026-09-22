@@ -21,6 +21,7 @@ final class ChatViewModel: ObservableObject {
     @Published var isRunningBenchmark = false
     @Published var collaborationMode = false
     @Published var individualMode = false
+    @Published var pendingImageURL: URL?
 
     private let ai = SenseiAI.shared
     private let downloads = BackgroundModelDownloadManager.shared
@@ -425,9 +426,19 @@ final class ChatViewModel: ObservableObject {
         return trimmed
     }
 
+    func attachImage(_ url: URL) {
+        guard !isThinking else { return }
+        pendingImageURL = url
+    }
+
+    func removePendingImage() {
+        pendingImageURL = nil
+    }
+
     func send() {
         let prompt = draft.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !prompt.isEmpty, !isThinking else { return }
+        let imageURL = pendingImageURL
+        guard (!prompt.isEmpty || imageURL != nil), !isThinking else { return }
 
         guard loadedModel != nil else {
             append(
@@ -439,10 +450,17 @@ final class ChatViewModel: ObservableObject {
             return
         }
 
-        draft = ""
-        append(ChatMessage(role: .user, text: prompt))
+        if imageURL != nil && loadedModel != .qwen25vl_3b {
+            append(ChatMessage(role: .assistant, text: "Load Qwen2.5-VL 3B in SOLO mode to analyze images."))
+            return
+        }
 
-        if let teaching = SenseiMemoryStore.shared.explicitTeaching(from: prompt),
+        let effectivePrompt = prompt.isEmpty ? "Describe and analyze this image." : prompt
+        draft = ""
+        pendingImageURL = nil
+        append(ChatMessage(role: .user, text: imageURL == nil ? effectivePrompt : "📷 \(effectivePrompt)"))
+
+        if imageURL == nil, let teaching = SenseiMemoryStore.shared.explicitTeaching(from: effectivePrompt),
            let memory = SenseiMemoryStore.shared.remember(teaching.text, kind: teaching.kind) {
             SenseiDiagnostics.shared.record(
                 model: loadedModel?.name,
@@ -477,14 +495,14 @@ final class ChatViewModel: ObservableObject {
 
 
             do {
-                let memoryContext = SenseiMemoryStore.shared.context(for: prompt)
+                let memoryContext = SenseiMemoryStore.shared.context(for: effectivePrompt)
                 let modelPrompt: String
                 if let memoryContext {
                     modelPrompt = """
                     \(memoryContext)
 
                     CURRENT USER REQUEST
-                    \(prompt)
+                    \(effectivePrompt)
                     """
                     SenseiDiagnostics.shared.record(
                         operationID: operationID,
@@ -493,10 +511,27 @@ final class ChatViewModel: ObservableObject {
                         message: "Relevant persistent local memories were attached to this generation."
                     )
                 } else {
-                    modelPrompt = prompt
+                    modelPrompt = effectivePrompt
                 }
 
-                if collaborationMode && collaborationAvailable {
+                if let imageURL {
+                    thinkingStatus = "Analyzing image locally…"
+                    _ = try await ai.replyWithImage(to: modelPrompt, imageURL: imageURL) { chunk in
+                        guard !chunk.isEmpty, !Task.isCancelled else { return }
+                        streamedText += chunk
+                        self.thinkingStatus = "Analyzing image locally…"
+                        if !receivedFirstChunk {
+                            receivedFirstChunk = true
+                            SenseiDiagnostics.shared.record(
+                                operationID: operationID,
+                                model: self.loadedModel?.name,
+                                stage: "VISION_FIRST_CHUNK",
+                                message: "Vision model returned its first generation chunk.",
+                                level: "SUCCESS"
+                            )
+                        }
+                    }
+                } else if collaborationMode && collaborationAvailable {
                     thinkingStatus = "SENSEI TEAM is collaborating…"
                     let teamAnswer = try await ai.collaborativeReply(
                         to: modelPrompt,
