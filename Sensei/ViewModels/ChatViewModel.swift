@@ -45,7 +45,7 @@ final class ChatViewModel: ObservableObject {
            let storedModel = LocalModelOption(rawValue: raw) {
             selectedModel = storedModel
         } else {
-            selectedModel = .qwen35_9b
+            selectedModel = .qwen35_4b
         }
 
         let saved = store.load()
