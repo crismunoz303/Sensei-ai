@@ -126,7 +126,7 @@ final class SenseiAI {
 
         let started = Date()
 
-        let isVisionModel = model == .qwen25vl_3b
+        let isVisionModel = model.supportsVision
         SenseiDiagnostics.shared.checkpoint(
             operationID: operationID,
             model: model,
@@ -216,9 +216,13 @@ final class SenseiAI {
         guard let primary = loadedModel else {
             throw SenseiAIError.noModelLoaded
         }
+        guard primary.supportsTextTeamReview else {
+            throw SenseiAIError.textModelRequiredForTeam
+        }
 
         let available = models.filter {
-            BackgroundModelDownloadManager.shared.isModelReady($0)
+            $0.supportsTextTeamReview
+                && BackgroundModelDownloadManager.shared.isModelReady($0)
         }
         guard available.count > 1 else {
             return try await reply(to: prompt)
@@ -435,6 +439,7 @@ enum SenseiAIError: LocalizedError {
     case noModelLoaded
     case modelNotDownloaded
     case visionModelRequired
+    case textModelRequiredForTeam
 
     var errorDescription: String? {
         switch self {
@@ -444,6 +449,8 @@ enum SenseiAIError: LocalizedError {
             return "This SENSEI model has not finished downloading yet."
         case .visionModelRequired:
             return "Image analysis requires the downloaded Qwen2.5-VL 3B vision model."
+        case .textModelRequiredForTeam:
+            return "SENSEI TEAM requires a loaded text model as its primary model."
         }
     }
 }
