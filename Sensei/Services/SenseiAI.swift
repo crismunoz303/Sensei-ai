@@ -306,9 +306,33 @@ final class SenseiAI {
                     operationID: operationID,
                     model: reviewer.name,
                     stage: "TEAM_CANCELLED",
-                    message: "TEAM collaboration was cancelled.",
+                    message: "TEAM collaboration was cancelled; restoring the primary model before returning.",
                     level: "WARNING"
                 )
+                if currentModel() != primary {
+                    do {
+                        _ = try await load(
+                            model: primary,
+                            operationID: operationID,
+                            progressHandler: { _ in }
+                        )
+                        SenseiDiagnostics.shared.record(
+                            operationID: operationID,
+                            model: primary.name,
+                            stage: "TEAM_PRIMARY_RESTORED_AFTER_CANCEL",
+                            message: "Primary model restored after TEAM cancellation.",
+                            level: "SUCCESS"
+                        )
+                    } catch {
+                        SenseiDiagnostics.shared.record(
+                            operationID: operationID,
+                            model: primary.name,
+                            stage: "TEAM_PRIMARY_RESTORE_AFTER_CANCEL_ERROR",
+                            message: error.localizedDescription,
+                            level: "ERROR"
+                        )
+                    }
+                }
                 throw CancellationError()
             } catch {
                 SenseiDiagnostics.shared.record(
