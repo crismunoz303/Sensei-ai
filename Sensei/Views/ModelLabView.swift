@@ -7,6 +7,9 @@ struct ModelLabView: View {
     @State private var showDiagnostics = false
     @State private var showMemory = false
     @State private var storageRefreshID = UUID()
+    @State private var reclaimableBytes: Int64 = 0
+    @State private var storageMessage: String?
+    @State private var isCleaningStorage = false
 
     var body: some View {
         NavigationStack {
@@ -53,6 +56,7 @@ struct ModelLabView: View {
             }
             .task {
                 chat.refreshDownloadState()
+                reclaimableBytes = await BackgroundModelDownloadManager.shared.removablePartialBytes()
             }
             .sheet(isPresented: $showDiagnostics) {
                 DiagnosticsView()
@@ -204,8 +208,52 @@ struct ModelLabView: View {
                 }
             }
 
+            if reclaimableBytes > 0 {
+                HStack {
+                    Text("SAFE TO CLEAN")
+                        .font(.caption2.monospaced().weight(.bold))
+                        .foregroundStyle(.red)
+                    Spacer()
+                    Text(ByteCountFormatter.string(fromByteCount: reclaimableBytes, countStyle: .file))
+                        .font(.caption.monospaced())
+                        .foregroundStyle(.secondary)
+                }
+
+                Button {
+                    isCleaningStorage = true
+                    Task {
+                        do {
+                            let reclaimed = try await BackgroundModelDownloadManager.shared.cleanIncompleteModelData()
+                            storageMessage = "Reclaimed " + ByteCountFormatter.string(fromByteCount: reclaimed, countStyle: .file) + "."
+                        } catch {
+                            storageMessage = error.localizedDescription
+                        }
+                        reclaimableBytes = await BackgroundModelDownloadManager.shared.removablePartialBytes()
+                        storageRefreshID = UUID()
+                        isCleaningStorage = false
+                    }
+                } label: {
+                    Label(isCleaningStorage ? "CLEANING…" : "CLEAN INCOMPLETE DOWNLOADS", systemImage: "trash")
+                        .font(.caption.weight(.bold))
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 9)
+                        .foregroundStyle(.white)
+                        .background(Color.red, in: RoundedRectangle(cornerRadius: 12))
+                }
+                .disabled(isCleaningStorage)
+            }
+
+            if let storageMessage {
+                Text(storageMessage)
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+            }
+
             Button {
-                storageRefreshID = UUID()
+                Task {
+                    reclaimableBytes = await BackgroundModelDownloadManager.shared.removablePartialBytes()
+                    storageRefreshID = UUID()
+                }
             } label: {
                 Label("REFRESH STORAGE", systemImage: "arrow.clockwise")
                     .font(.caption.weight(.bold))
