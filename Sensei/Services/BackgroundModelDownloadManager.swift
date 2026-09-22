@@ -256,6 +256,43 @@ final class BackgroundModelDownloadManager: NSObject, @unchecked Sendable {
         modelDirectory(for: model)
     }
 
+    func installedBytes(for model: LocalModelOption) -> Int64 {
+        directoryBytes(at: modelDirectory(for: model))
+    }
+
+    func storageBreakdown() -> [(model: LocalModelOption, bytes: Int64, ready: Bool)] {
+        LocalModelOption.allCases.map {
+            ($0, installedBytes(for: $0), isModelReady($0))
+        }
+    }
+
+    func modelsRootBytes() -> Int64 {
+        let base = fileManager.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+        return directoryBytes(
+            at: base
+                .appendingPathComponent("SENSEI", isDirectory: true)
+                .appendingPathComponent("Models", isDirectory: true)
+        )
+    }
+
+    private func directoryBytes(at root: URL) -> Int64 {
+        guard fileManager.fileExists(atPath: root.path) else { return 0 }
+        let keys: Set<URLResourceKey> = [.isRegularFileKey, .fileAllocatedSizeKey, .totalFileAllocatedSizeKey]
+        guard let enumerator = fileManager.enumerator(
+            at: root,
+            includingPropertiesForKeys: Array(keys),
+            options: [.skipsHiddenFiles]
+        ) else { return 0 }
+
+        var total: Int64 = 0
+        for case let url as URL in enumerator {
+            guard let values = try? url.resourceValues(forKeys: keys),
+                  values.isRegularFile == true else { continue }
+            total += Int64(values.totalFileAllocatedSize ?? values.fileAllocatedSize ?? 0)
+        }
+        return total
+    }
+
     private func fetchManifest(for model: LocalModelOption) async throws -> Manifest {
         let repo = model.repositoryID
         let urlString =
