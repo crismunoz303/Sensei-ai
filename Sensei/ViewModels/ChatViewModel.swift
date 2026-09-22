@@ -439,12 +439,25 @@ final class ChatViewModel: ObservableObject {
     }
 
     func attachImage(_ url: URL) {
-        guard !isThinking else { return }
+        guard !isThinking else {
+            try? FileManager.default.removeItem(at: url)
+            return
+        }
+        if let oldURL = pendingImageURL, oldURL != url {
+            try? FileManager.default.removeItem(at: oldURL)
+        }
         pendingImageURL = url
     }
 
     func removePendingImage() {
+        guard let url = pendingImageURL else { return }
         pendingImageURL = nil
+        try? FileManager.default.removeItem(at: url)
+    }
+
+    private func deleteTemporaryImage(_ url: URL?) {
+        guard let url else { return }
+        try? FileManager.default.removeItem(at: url)
     }
 
     func send() {
@@ -678,6 +691,7 @@ final class ChatViewModel: ObservableObject {
                 statusText = "ERROR"
             }
 
+            deleteTemporaryImage(imageURL)
             isThinking = false
             generationTask = nil
         }
