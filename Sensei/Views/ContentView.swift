@@ -15,7 +15,7 @@ struct ContentView: View {
 
                 VStack(spacing: 0) {
                     header
-                    Divider().overlay(Color.red.opacity(0.35))
+                    modeBar
                     conversation
                     composer
                 }
@@ -31,51 +31,122 @@ struct ContentView: View {
 
     private var header: some View {
         HStack(spacing: 12) {
+            ZStack {
+                RoundedRectangle(cornerRadius: 13)
+                    .fill(Color.red)
+                    .frame(width: 44, height: 44)
+                Text("S")
+                    .font(.system(size: 21, weight: .black, design: .rounded))
+                    .foregroundStyle(.white)
+            }
+
             VStack(alignment: .leading, spacing: 2) {
                 Text("SENSEI")
-                    .font(.system(size: 24, weight: .black, design: .rounded))
+                    .font(.system(size: 22, weight: .black, design: .rounded))
                     .foregroundStyle(.white)
-
-                Button {
-                    showModelLab = true
-                } label: {
-                    HStack(spacing: 5) {
-                        Text("MODEL LAB")
-                        Image(systemName: "chevron.right")
-                    }
-                    .font(.caption2.weight(.bold))
-                    .tracking(1.5)
-                    .foregroundStyle(.red)
-                }
+                Text(activeModeDescription)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
             }
 
             Spacer()
 
-            VStack(alignment: .trailing, spacing: 5) {
-                HStack(spacing: 6) {
+            Button {
+                showModelLab = true
+            } label: {
+                HStack(spacing: 7) {
                     Circle()
                         .fill(chat.statusText == "LOCAL" ? Color.red : Color.gray)
                         .frame(width: 7, height: 7)
-
-                    Text(chat.statusText)
-                        .font(.caption2.monospaced().weight(.bold))
-                        .foregroundStyle(chat.statusText == "LOCAL" ? .red : .secondary)
+                    VStack(alignment: .trailing, spacing: 1) {
+                        Text(chat.statusText)
+                            .font(.caption2.monospaced().weight(.bold))
+                        Text(chat.loadedModel?.name ?? chat.selectedModel.name)
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
+                    }
+                    Image(systemName: "slider.horizontal.3")
+                        .font(.system(size: 14, weight: .semibold))
+                        .foregroundStyle(.red)
                 }
-
-                Text(chat.loadedModel?.name ?? chat.selectedModel.name)
-                    .font(.caption2)
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
-            }
-            .padding(.horizontal, 10)
-            .padding(.vertical, 7)
-            .background(.white.opacity(0.06), in: RoundedRectangle(cornerRadius: 12))
-            .onTapGesture {
-                showModelLab = true
+                .foregroundStyle(chat.statusText == "LOCAL" ? .red : .secondary)
+                .padding(.horizontal, 11)
+                .padding(.vertical, 8)
+                .background(.white.opacity(0.06), in: RoundedRectangle(cornerRadius: 13))
             }
         }
-        .padding(.horizontal, 18)
-        .padding(.vertical, 14)
+        .padding(.horizontal, 16)
+        .padding(.top, 10)
+        .padding(.bottom, 8)
+    }
+
+    private var modeBar: some View {
+        HStack(spacing: 4) {
+            modeButton(title: "FAST", icon: "bolt.fill", active: !chat.collaborationMode && !chat.individualMode, enabled: !chat.isThinking && !chat.isLoadingModel) {
+                chat.activateFastMode()
+            }
+
+            modeButton(title: "TEAM", icon: "person.2.fill", active: chat.collaborationMode, enabled: chat.collaborationAvailable && !chat.isThinking && !chat.isLoadingModel) {
+                chat.activateTeamMode()
+            }
+
+            Menu {
+                ForEach(chat.downloadedModels) { model in
+                    Button {
+                        chat.activateIndividualMode(model)
+                    } label: {
+                        if chat.individualMode && chat.selectedModel == model {
+                            Label(model.name, systemImage: "checkmark")
+                        } else {
+                            Text(model.name)
+                        }
+                    }
+                }
+            } label: {
+                HStack(spacing: 5) {
+                    Image(systemName: "person.fill")
+                    Text("SOLO")
+                }
+                .font(.caption.monospaced().weight(.bold))
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 9)
+                .foregroundStyle(chat.individualMode ? .white : .secondary)
+                .background(chat.individualMode ? Color.red : Color.clear, in: RoundedRectangle(cornerRadius: 10))
+            }
+            .disabled(chat.downloadedModels.isEmpty || chat.isThinking || chat.isLoadingModel)
+        }
+        .padding(4)
+        .background(.white.opacity(0.06), in: RoundedRectangle(cornerRadius: 13))
+        .padding(.horizontal, 16)
+        .padding(.bottom, 8)
+    }
+
+    private func modeButton(title: String, icon: String, active: Bool, enabled: Bool, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            HStack(spacing: 5) {
+                Image(systemName: icon)
+                Text(title)
+            }
+            .font(.caption.monospaced().weight(.bold))
+            .frame(maxWidth: .infinity)
+            .padding(.vertical, 9)
+            .foregroundStyle(active ? .white : .secondary)
+            .background(active ? Color.red : Color.clear, in: RoundedRectangle(cornerRadius: 10))
+        }
+        .disabled(!enabled)
+        .opacity(enabled || active ? 1 : 0.45)
+    }
+
+    private var activeModeDescription: String {
+        if chat.individualMode {
+            return "SOLO · \(chat.selectedModel.name)"
+        }
+        if chat.collaborationMode {
+            return "TEAM · \(chat.downloadedTextModels.count) local text AIs"
+        }
+        return "FAST · \(chat.loadedModel?.name ?? chat.selectedModel.name)"
     }
 
     private var conversation: some View {
@@ -145,78 +216,6 @@ struct ContentView: View {
                 }
                 .padding(8)
                 .background(.white.opacity(0.06), in: RoundedRectangle(cornerRadius: 12))
-            }
-
-            VStack(alignment: .leading, spacing: 8) {
-                HStack(spacing: 8) {
-                    Button {
-                        chat.activateFastMode()
-                    } label: {
-                        Text("FAST")
-                            .font(.caption2.monospaced().weight(.bold))
-                            .foregroundStyle(!chat.collaborationMode && !chat.individualMode ? Color.white : Color.secondary)
-                            .padding(.horizontal, 11)
-                            .padding(.vertical, 7)
-                            .background(!chat.collaborationMode && !chat.individualMode ? Color.red.opacity(0.8) : Color.white.opacity(0.06), in: Capsule())
-                    }
-
-                    Button {
-                        chat.activateTeamMode()
-                    } label: {
-                        HStack(spacing: 5) {
-                            Image(systemName: "person.2.fill")
-                            Text("TEAM")
-                        }
-                        .font(.caption2.monospaced().weight(.bold))
-                        .foregroundStyle(chat.collaborationMode ? Color.white : (chat.collaborationAvailable ? Color.red : Color.secondary))
-                        .padding(.horizontal, 11)
-                        .padding(.vertical, 7)
-                        .background(chat.collaborationMode ? Color.red.opacity(0.8) : Color.white.opacity(0.06), in: Capsule())
-                    }
-                    .disabled(!chat.collaborationAvailable)
-
-                    Menu {
-                        ForEach(chat.downloadedModels) { model in
-                            Button {
-                                chat.activateIndividualMode(model)
-                            } label: {
-                                if chat.individualMode && chat.selectedModel == model {
-                                    Label(model.name, systemImage: "checkmark")
-                                } else {
-                                    Text(model.name)
-                                }
-                            }
-                        }
-                    } label: {
-                        HStack(spacing: 5) {
-                            Image(systemName: "person.fill")
-                            Text("SOLO")
-                        }
-                        .font(.caption2.monospaced().weight(.bold))
-                        .foregroundStyle(chat.individualMode ? Color.white : (chat.downloadedModels.isEmpty ? Color.secondary : Color.red))
-                        .padding(.horizontal, 11)
-                        .padding(.vertical, 7)
-                        .background(chat.individualMode ? Color.red.opacity(0.8) : Color.white.opacity(0.06), in: Capsule())
-                    }
-                    .disabled(chat.downloadedModels.isEmpty || chat.isThinking || chat.isLoadingModel)
-
-                    Spacer()
-                }
-
-                if chat.individualMode {
-                    Text("SOLO • \\(chat.selectedModel.name)")
-                        .font(.caption2.monospaced().weight(.semibold))
-                        .foregroundStyle(.secondary)
-                } else if chat.collaborationMode {
-                    Text("\\(chat.downloadedModels.count) LOCAL AIs • sequential collaboration")
-                        .font(.caption2.monospaced())
-                        .foregroundStyle(.secondary)
-                } else if !chat.collaborationAvailable {
-                    Text("TEAM unlocks with 2+ downloaded models")
-                        .font(.caption2)
-                        .foregroundStyle(.secondary)
-                        .lineLimit(1)
-                }
             }
 
             HStack(spacing: 10) {
