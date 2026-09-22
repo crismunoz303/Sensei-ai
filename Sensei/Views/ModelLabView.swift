@@ -6,6 +6,7 @@ struct ModelLabView: View {
     @StateObject private var drive = GoogleDriveBackupManager.shared
     @State private var showDiagnostics = false
     @State private var showMemory = false
+    @State private var storageRefreshID = UUID()
 
     var body: some View {
         NavigationStack {
@@ -16,6 +17,7 @@ struct ModelLabView: View {
                     VStack(alignment: .leading, spacing: 18) {
                         intro
                         drivePanel
+                        storagePanel
                         modelCards
                         loadPanel
                         benchmarkPanel
@@ -162,6 +164,58 @@ struct ModelLabView: View {
                 .background(drive.isSignedIn ? .white.opacity(0.09) : Color.red, in: RoundedRectangle(cornerRadius: 14))
             }
         }
+        .padding(14)
+        .background(.white.opacity(0.05), in: RoundedRectangle(cornerRadius: 16))
+    }
+
+    private var storagePanel: some View {
+        let rows = BackgroundModelDownloadManager.shared.storageBreakdown()
+        let total = BackgroundModelDownloadManager.shared.modelsRootBytes()
+
+        return VStack(alignment: .leading, spacing: 10) {
+            HStack {
+                Label("LOCAL MODEL STORAGE", systemImage: "internaldrive")
+                    .font(.caption.monospaced().weight(.bold))
+                    .foregroundStyle(.red)
+                Spacer()
+                Text(ByteCountFormatter.string(fromByteCount: total, countStyle: .file))
+                    .font(.caption.monospaced().weight(.bold))
+                    .foregroundStyle(.white)
+            }
+
+            Text("Exact allocated size of SENSEI model files currently stored on this iPhone.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+
+            ForEach(rows, id: \.model.rawValue) { row in
+                HStack {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(row.model.name)
+                            .font(.caption.weight(.semibold))
+                            .foregroundStyle(.white)
+                        Text(row.ready ? "COMPLETE" : (row.bytes > 0 ? "PARTIAL" : "NOT STORED"))
+                            .font(.caption2.monospaced())
+                            .foregroundStyle(row.ready ? .red : .secondary)
+                    }
+                    Spacer()
+                    Text(ByteCountFormatter.string(fromByteCount: row.bytes, countStyle: .file))
+                        .font(.caption.monospaced())
+                        .foregroundStyle(.secondary)
+                }
+            }
+
+            Button {
+                storageRefreshID = UUID()
+            } label: {
+                Label("REFRESH STORAGE", systemImage: "arrow.clockwise")
+                    .font(.caption.weight(.bold))
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 9)
+                    .foregroundStyle(.white)
+                    .background(.white.opacity(0.09), in: RoundedRectangle(cornerRadius: 12))
+            }
+        }
+        .id(storageRefreshID)
         .padding(14)
         .background(.white.opacity(0.05), in: RoundedRectangle(cornerRadius: 16))
     }
