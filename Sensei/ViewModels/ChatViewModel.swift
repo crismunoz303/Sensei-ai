@@ -32,6 +32,8 @@ final class ChatViewModel: ObservableObject {
     private var downloadObserver: NSObjectProtocol?
     private var downloadFinishObserver: NSObjectProtocol?
     private var generationTask: Task<Void, Never>?
+    private var lastStreamRenderAt = ContinuousClock.now
+    private let streamRenderInterval: Duration = .milliseconds(80)
 
     var downloadedModels: [LocalModelOption] {
         LocalModelOption.allCases.filter { downloads.isModelReady($0) }
@@ -506,6 +508,7 @@ final class ChatViewModel: ObservableObject {
         let responseCreatedAt = Date()
         var responseInserted = false
 
+        lastStreamRenderAt = .now - streamRenderInterval
         generationTask = Task {
             let operationID = UUID().uuidString
             SenseiDiagnostics.shared.record(
@@ -584,7 +587,9 @@ final class ChatViewModel: ObservableObject {
                         self.thinkingStatus = "Writing response…"
                     }
 
-                    if let visibleText = Self.liveAnswerText(streamedText) {
+                    if let visibleText = Self.liveAnswerText(streamedText),
+                       self.lastStreamRenderAt.duration(to: .now) >= self.streamRenderInterval {
+                        self.lastStreamRenderAt = .now
                         self.thinkingStatus = "Writing response…"
                         if let index = self.messages.firstIndex(where: { $0.id == responseID }) {
                             self.messages[index] = ChatMessage(
