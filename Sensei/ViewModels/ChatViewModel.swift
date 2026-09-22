@@ -336,7 +336,11 @@ final class ChatViewModel: ObservableObject {
         benchmarkResult = nil
 
         Task {
-            let operationID = UUID().uuidString
+            let modeName = collaborationMode ? "TEAM" : (individualMode ? "SOLO" : "FAST")
+            let operationID = SenseiDiagnostics.shared.startPerformanceSession(
+                model: loadedModel?.name,
+                mode: modeName
+            )
             SenseiDiagnostics.shared.record(
                 operationID: operationID,
                 model: loadedModel?.name,
@@ -550,6 +554,7 @@ final class ChatViewModel: ObservableObject {
                         self.thinkingStatus = "Analyzing image locally…"
                         if !receivedFirstChunk {
                             receivedFirstChunk = true
+                            SenseiDiagnostics.shared.markFirstOutput(operationID: operationID)
                             SenseiDiagnostics.shared.record(
                                 operationID: operationID,
                                 model: self.loadedModel?.name,
@@ -567,6 +572,7 @@ final class ChatViewModel: ObservableObject {
                     )
                     streamedText = teamAnswer
                     receivedFirstChunk = true
+                    SenseiDiagnostics.shared.markFirstOutput(operationID: operationID)
                     thinkingStatus = "Writing response…"
                     SenseiDiagnostics.shared.record(
                         operationID: operationID,
@@ -608,6 +614,7 @@ final class ChatViewModel: ObservableObject {
 
                     if !receivedFirstChunk {
                         receivedFirstChunk = true
+                        SenseiDiagnostics.shared.markFirstOutput(operationID: operationID)
                         SenseiDiagnostics.shared.record(
                             operationID: operationID,
                             model: self.loadedModel?.name,
@@ -667,12 +674,15 @@ final class ChatViewModel: ObservableObject {
                     level: "SUCCESS"
                 )
                 statusText = "LOCAL"
+                SenseiDiagnostics.shared.stopPerformanceSession(outcome: "SUCCESS")
             } catch is CancellationError {
+                SenseiDiagnostics.shared.stopPerformanceSession(outcome: "CANCELLED")
                 // Preserve only a real answer bubble; private reasoning is discarded.
                 if responseInserted {
                     store.save(messages)
                 }
             } catch {
+                SenseiDiagnostics.shared.stopPerformanceSession(outcome: "ERROR")
                 if let index = messages.firstIndex(where: { $0.id == responseID }) {
                     messages[index] = ChatMessage(
                         id: responseID,
