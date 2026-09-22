@@ -267,12 +267,29 @@ final class BackgroundModelDownloadManager: NSObject, @unchecked Sendable {
     }
 
     func modelsRootBytes() -> Int64 {
-        let base = fileManager.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
-        return directoryBytes(
-            at: base
-                .appendingPathComponent("SENSEI", isDirectory: true)
-                .appendingPathComponent("Models", isDirectory: true)
-        )
+        directoryBytes(at: modelsRootDirectory())
+    }
+
+    func orphanedModelStorage() -> [(name: String, bytes: Int64)] {
+        let root = modelsRootDirectory()
+        let knownNames = Set(LocalModelOption.allCases.map(\.rawValue))
+        guard let children = try? fileManager.contentsOfDirectory(
+            at: root,
+            includingPropertiesForKeys: [.isDirectoryKey],
+            options: []
+        ) else { return [] }
+
+        return children.compactMap { url in
+            guard knownNames.contains(url.lastPathComponent) == false else { return nil }
+            let bytes = directoryBytes(at: url)
+            guard bytes > 0 else { return nil }
+            return (url.lastPathComponent, bytes)
+        }
+        .sorted { $0.bytes > $1.bytes }
+    }
+
+    func orphanedModelBytes() -> Int64 {
+        orphanedModelStorage().reduce(Int64(0)) { $0 + $1.bytes }
     }
 
     func removablePartialBytes() async -> Int64 {
@@ -390,6 +407,15 @@ final class BackgroundModelDownloadManager: NSObject, @unchecked Sendable {
         }
 
         return url
+    }
+
+    private func modelsRootDirectory() -> URL {
+        fileManager.urls(
+            for: .applicationSupportDirectory,
+            in: .userDomainMask
+        )[0]
+        .appendingPathComponent("SENSEI", isDirectory: true)
+        .appendingPathComponent("Models", isDirectory: true)
     }
 
     private func modelDirectory(for model: LocalModelOption) -> URL {
