@@ -275,6 +275,46 @@ final class BackgroundModelDownloadManager: NSObject, @unchecked Sendable {
         )
     }
 
+    func removablePartialBytes() async -> Int64 {
+        let tasks = await allTasks()
+        let activeModels = Set(tasks.compactMap { metadata(for: $0)?.modelRawValue })
+
+        return LocalModelOption.allCases.reduce(Int64(0)) { total, model in
+            guard !isModelReady(model), !activeModels.contains(model.rawValue) else { return total }
+            return total + directoryBytes(at: modelDirectory(for: model))
+        }
+    }
+
+    func cleanIncompleteModelData() async throws -> Int64 {
+        let tasks = await allTasks()
+        let activeModels = Set(tasks.compactMap { metadata(for: $0)?.modelRawValue })
+        var reclaimed: Int64 = 0
+
+        for model in LocalModelOption.allCases {
+            guard !isModelReady(model), !activeModels.contains(model.rawValue) else { continue }
+            let directory = modelDirectory(for: model)
+            let bytes = directoryBytes(at: directory)
+            guard bytes > 0 else { continue }
+
+            try fileManager.removeItem(at: directory)
+            defaults.removeObject(forKey: manifestKey(for: model))
+            defaults.removeObject(forKey: errorKey(for: model))
+            defaults.removeObject(forKey: notificationMilestoneKey(for: model))
+            reclaimed += bytes
+        }
+
+        return reclaimed
+    }
+
+    func cleanVisionTemporaryFiles() -> Int64 {
+        let directory = fileManager.temporaryDirectory
+            .appendingPathComponent("SENSEI-Vision", isDirectory: true)
+        let bytes = directoryBytes(at: directory)
+        guard bytes > 0 else { return 0 }
+        try? fileManager.removeItem(at: directory)
+        return bytes
+    }
+
     private func directoryBytes(at root: URL) -> Int64 {
         guard fileManager.fileExists(atPath: root.path) else { return 0 }
         let keys: Set<URLResourceKey> = [.isRegularFileKey, .fileAllocatedSizeKey, .totalFileAllocatedSizeKey]
