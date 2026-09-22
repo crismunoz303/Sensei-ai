@@ -7,6 +7,21 @@ enum LocalModelOption: String, CaseIterable, Identifiable, Codable, Sendable {
 
     var id: String { rawValue }
 
+    enum RuntimeKind: String, Sendable {
+        case text
+        case vision
+    }
+
+    var runtimeKind: RuntimeKind {
+        switch self {
+        case .qwen25vl_3b: .vision
+        case .gemma4_e4b, .qwen35_4b: .text
+        }
+    }
+
+    var supportsVision: Bool { runtimeKind == .vision }
+    var supportsTextTeamReview: Bool { runtimeKind == .text }
+
     var name: String {
         switch self {
         case .qwen25vl_3b: "Qwen2.5-VL 3B"
