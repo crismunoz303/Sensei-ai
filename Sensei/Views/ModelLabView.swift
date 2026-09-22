@@ -237,6 +237,8 @@ struct ModelLabView: View {
     private var storagePanel: some View {
         let rows = BackgroundModelDownloadManager.shared.storageBreakdown()
         let total = BackgroundModelDownloadManager.shared.modelsRootBytes()
+        let orphaned = BackgroundModelDownloadManager.shared.orphanedModelStorage()
+        let orphanedBytes = orphaned.reduce(Int64(0)) { $0 + $1.bytes }
 
         return VStack(alignment: .leading, spacing: 10) {
             HStack {
@@ -267,6 +269,38 @@ struct ModelLabView: View {
                     Text(ByteCountFormatter.string(fromByteCount: row.bytes, countStyle: .file))
                         .font(.caption.monospaced())
                         .foregroundStyle(.secondary)
+                }
+            }
+
+            if orphanedBytes > 0 {
+                Divider().overlay(Color.white.opacity(0.08))
+
+                HStack {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("UNRECOGNIZED MODEL DATA")
+                            .font(.caption2.monospaced().weight(.bold))
+                            .foregroundStyle(.orange)
+                        Text("Retired or unknown folders are shown for review only. Nothing here is deleted automatically.")
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                    }
+                    Spacer()
+                    Text(ByteCountFormatter.string(fromByteCount: orphanedBytes, countStyle: .file))
+                        .font(.caption.monospaced().weight(.bold))
+                        .foregroundStyle(.orange)
+                }
+
+                ForEach(Array(orphaned.enumerated()), id: \.offset) { _, item in
+                    HStack {
+                        Text(item.name)
+                            .font(.caption.monospaced())
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
+                        Spacer()
+                        Text(ByteCountFormatter.string(fromByteCount: item.bytes, countStyle: .file))
+                            .font(.caption.monospaced())
+                            .foregroundStyle(.secondary)
+                    }
                 }
             }
 
