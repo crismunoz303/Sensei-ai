@@ -9,6 +9,7 @@ final class SenseiAppDelegate: NSObject, UIApplicationDelegate {
         didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]? = nil
     ) -> Bool {
         _ = BackgroundModelDownloadManager.shared
+        _ = BackgroundModelDownloadManager.shared.cleanVisionTemporaryFiles()
         return true
     }
 
