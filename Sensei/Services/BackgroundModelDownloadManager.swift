@@ -321,7 +321,7 @@ final class BackgroundModelDownloadManager: NSObject, @unchecked Sendable {
         guard let enumerator = fileManager.enumerator(
             at: root,
             includingPropertiesForKeys: Array(keys),
-            options: [.skipsHiddenFiles]
+            options: []
         ) else { return 0 }
 
         var total: Int64 = 0
