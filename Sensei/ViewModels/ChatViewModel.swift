@@ -37,8 +37,12 @@ final class ChatViewModel: ObservableObject {
         LocalModelOption.allCases.filter { downloads.isModelReady($0) }
     }
 
+    var downloadedTextModels: [LocalModelOption] {
+        downloadedModels.filter(\.supportsTextTeamReview)
+    }
+
     var collaborationAvailable: Bool {
-        downloadedModels.count > 1
+        downloadedTextModels.count > 1
     }
 
     init() {
@@ -535,7 +539,7 @@ final class ChatViewModel: ObservableObject {
                     thinkingStatus = "SENSEI TEAM is collaborating…"
                     let teamAnswer = try await ai.collaborativeReply(
                         to: modelPrompt,
-                        models: downloadedModels
+                        models: downloadedTextModels
                     )
                     streamedText = teamAnswer
                     receivedFirstChunk = true
