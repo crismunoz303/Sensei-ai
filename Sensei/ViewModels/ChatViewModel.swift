@@ -147,9 +147,17 @@ final class ChatViewModel: ObservableObject {
     }
 
     func activateTeamMode() {
-        guard collaborationAvailable else { return }
+        guard collaborationAvailable, !isThinking, !isLoadingModel else { return }
         collaborationMode = true
         individualMode = false
+
+        // TEAM always starts from a text primary. If SOLO vision was loaded,
+        // restore the user's proven Qwen text primary before collaboration.
+        if loadedModel?.supportsTextTeamReview != true,
+           downloads.isModelReady(.qwen35_4b) {
+            selectModel(.qwen35_4b)
+            loadModelFromDisk(.qwen35_4b)
+        }
     }
 
     func activateIndividualMode(_ model: LocalModelOption) {
