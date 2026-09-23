@@ -261,7 +261,6 @@ final class SenseiDiagnostics: ObservableObject {
             "Note: correlations in this report are observations; they do not by themselves prove root cause.",
             ""
         ]
-        ]
 
         for event in events.reversed() {
             lines.append("------------------------------------------------------------")
