@@ -371,6 +371,7 @@ final class ChatViewModel: ObservableObject {
                 )
                 SenseiDiagnostics.shared.stopPerformanceSession(outcome: "SUCCESS")
             } catch {
+                SenseiDiagnostics.shared.clearGenerationCheckpoint()
                 SenseiDiagnostics.shared.stopPerformanceSession(outcome: "ERROR")
                 benchmarkError = error.localizedDescription
                 SenseiDiagnostics.shared.record(
@@ -517,7 +518,16 @@ final class ChatViewModel: ObservableObject {
 
         lastStreamRenderAt = .now - streamRenderInterval
         generationTask = Task {
-            let operationID = UUID().uuidString
+            let modeName = collaborationMode ? "TEAM" : (individualMode ? "SOLO" : "FAST")
+            let operationID = SenseiDiagnostics.shared.startPerformanceSession(
+                model: loadedModel?.name,
+                mode: modeName
+            )
+            SenseiDiagnostics.shared.beginGenerationCheckpoint(
+                operationID: operationID,
+                model: loadedModel?.name,
+                mode: modeName
+            )
             SenseiDiagnostics.shared.record(
                 operationID: operationID,
                 model: loadedModel?.name,
@@ -677,8 +687,10 @@ final class ChatViewModel: ObservableObject {
                     level: "SUCCESS"
                 )
                 statusText = "LOCAL"
+                SenseiDiagnostics.shared.clearGenerationCheckpoint()
                 SenseiDiagnostics.shared.stopPerformanceSession(outcome: "SUCCESS")
             } catch is CancellationError {
+                SenseiDiagnostics.shared.clearGenerationCheckpoint()
                 SenseiDiagnostics.shared.stopPerformanceSession(outcome: "CANCELLED")
                 // Preserve only a real answer bubble; private reasoning is discarded.
                 if responseInserted {
