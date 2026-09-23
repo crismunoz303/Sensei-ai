@@ -1,5 +1,6 @@
 import Foundation
 import Darwin
+import UIKit
 
 struct SenseiDiagnosticEvent: Codable, Identifiable {
     let id: UUID
@@ -60,6 +61,7 @@ final class SenseiDiagnostics: ObservableObject {
     private let decoder: JSONDecoder
     private let maxEvents = 500
     private var thermalObserver: NSObjectProtocol?
+    private var memoryWarningObserver: NSObjectProtocol?
     private var persistenceTask: Task<Void, Never>?
     private var performanceTask: Task<Void, Never>?
     private var performanceSessionID: String?
@@ -82,6 +84,22 @@ final class SenseiDiagnostics: ObservableObject {
         events = readEvents()
         recoverInterruptedOperationIfNeeded()
         record(stage: "APP_LAUNCHED", message: "SENSEI launched.", level: "INFO")
+        memoryWarningObserver = NotificationCenter.default.addObserver(
+            forName: UIApplication.didReceiveMemoryWarningNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor in
+                self?.record(
+                    operationID: self?.performanceSessionID,
+                    model: self?.performanceModel,
+                    stage: "IOS_MEMORY_WARNING",
+                    message: "iOS delivered a memory warning while SENSEI was running. This is direct evidence of memory pressure, but does not by itself identify which allocation caused it.",
+                    level: "WARNING"
+                )
+            }
+        }
+
         thermalObserver = NotificationCenter.default.addObserver(
             forName: ProcessInfo.thermalStateDidChangeNotification,
             object: nil,
