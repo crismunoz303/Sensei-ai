@@ -83,6 +83,7 @@ final class SenseiDiagnostics: ObservableObject {
 
         events = readEvents()
         recoverInterruptedOperationIfNeeded()
+        recoverInterruptedGenerationIfNeeded()
         record(stage: "APP_LAUNCHED", message: "SENSEI launched.", level: "INFO")
         memoryWarningObserver = NotificationCenter.default.addObserver(
             forName: UIApplication.didReceiveMemoryWarningNotification,
@@ -310,6 +311,46 @@ final class SenseiDiagnostics: ObservableObject {
                message: findings.joined(separator: " "), level: findings.count > 1 || worst == "SERIOUS" || worst == "CRITICAL" ? "WARNING" : "INFO")
     }
 
+    func beginGenerationCheckpoint(operationID: String, model: String?, mode: String) {
+        let event = SenseiDiagnosticEvent(
+            id: UUID(), timestamp: Date(), level: "ACTIVE",
+            operationID: operationID, model: model, stage: "GENERATION_ACTIVE",
+            message: "Generation began in \(mode) mode.",
+            residentMemoryBytes: Self.residentMemoryBytes(),
+            thermalState: Self.thermalStateName(ProcessInfo.processInfo.thermalState),
+            lowPowerMode: ProcessInfo.processInfo.isLowPowerModeEnabled,
+            systemUptime: ProcessInfo.processInfo.systemUptime
+        )
+        if let data = try? encoder.encode(event) {
+            try? data.write(to: activeGenerationURL, options: [.atomic])
+        }
+    }
+
+    func clearGenerationCheckpoint() {
+        try? fileManager.removeItem(at: activeGenerationURL)
+    }
+
+    private func recoverInterruptedGenerationIfNeeded() {
+        guard
+            let data = try? Data(contentsOf: activeGenerationURL),
+            let event = try? decoder.decode(SenseiDiagnosticEvent.self, from: data)
+        else { return }
+
+        let recovered = SenseiDiagnosticEvent(
+            id: UUID(), timestamp: Date(), level: "CRITICAL",
+            operationID: event.operationID, model: event.model,
+            stage: "PROCESS_ENDED_DURING_GENERATION",
+            message: "The previous SENSEI process ended while a generation was active. Last persisted state: \(event.message) This establishes that the process ended during generation, but does not by itself identify whether the cause was memory pressure, thermal pressure, a native MLX failure, OS termination, or another process-level event.",
+            residentMemoryBytes: Self.residentMemoryBytes(),
+            thermalState: Self.thermalStateName(ProcessInfo.processInfo.thermalState),
+            lowPowerMode: ProcessInfo.processInfo.isLowPowerModeEnabled,
+            systemUptime: ProcessInfo.processInfo.systemUptime
+        )
+        events.insert(recovered, at: 0)
+        persistEventsNow()
+        clearGenerationCheckpoint()
+    }
+
     /// Complete, untruncated text report for debugging/export.
     /// Chat response limits never apply to this file.
     var exportReportURL: URL {
@@ -457,6 +498,10 @@ final class SenseiDiagnostics: ObservableObject {
 
     private var activeOperationURL: URL {
         diagnosticsDirectory.appendingPathComponent("active-model-load.json")
+    }
+
+    private var activeGenerationURL: URL {
+        diagnosticsDirectory.appendingPathComponent("active-generation.json")
     }
 
     private static func thermalRank(_ state: String) -> Int {
