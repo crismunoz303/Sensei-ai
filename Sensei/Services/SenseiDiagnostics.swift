@@ -66,6 +66,10 @@ final class SenseiDiagnostics: ObservableObject {
     private var performanceModel: String?
     private var performanceMode: String?
     private var performanceStartedAt: Date?
+    private var sessionStartMemory: UInt64?
+    private var sessionPeakMemory: UInt64?
+    private var sessionStartThermal: String?
+    private var sessionWorstThermal: String?
 
     private init() {
         encoder = JSONEncoder()
@@ -189,6 +193,10 @@ final class SenseiDiagnostics: ObservableObject {
         performanceModel = model
         performanceMode = mode
         performanceStartedAt = Date()
+        sessionStartMemory = Self.residentMemoryBytes()
+        sessionPeakMemory = sessionStartMemory
+        sessionStartThermal = Self.thermalStateName(ProcessInfo.processInfo.thermalState)
+        sessionWorstThermal = sessionStartThermal
         record(operationID: id, model: model, stage: "PERFORMANCE_SESSION_STARTED",
                message: "Performance trace started. Mode: \(mode). Thermal, memory, power state and elapsed time will be sampled.",
                level: "INFO")
@@ -215,24 +223,73 @@ final class SenseiDiagnostics: ObservableObject {
         performanceTask = nil
         recordPerformanceSample(stage: "PERFORMANCE_FINAL_SAMPLE")
         let elapsed = performanceStartedAt.map { Date().timeIntervalSince($0) } ?? 0
+        let endMemory = Self.residentMemoryBytes()
+        let deltaMB: Double? = {
+            guard let start = sessionStartMemory, let endMemory else { return nil }
+            return Double(Int64(endMemory) - Int64(start)) / 1_000_000
+        }()
+        let memorySummary = deltaMB.map { String(format: " RAM delta: %+.1f MB.", $0) } ?? ""
+        let thermalSummary = " Thermal: \(sessionStartThermal ?? "UNKNOWN") -> \(sessionWorstThermal ?? "UNKNOWN")."
         record(operationID: id, model: performanceModel, stage: "PERFORMANCE_SESSION_ENDED",
-               message: String(format: "Performance trace ended after %.2f seconds. Outcome: %@. Mode: %@.", elapsed, outcome, performanceMode ?? "UNKNOWN"),
+               message: String(format: "Performance trace ended after %.2f seconds. Outcome: %@. Mode: %@.%@%@", elapsed, outcome, performanceMode ?? "UNKNOWN", memorySummary, thermalSummary),
                level: outcome == "SUCCESS" ? "SUCCESS" : "INFO")
+        classifyCompletedSession(operationID: id)
         performanceSessionID = nil; performanceModel = nil; performanceMode = nil; performanceStartedAt = nil
+        sessionStartMemory = nil; sessionPeakMemory = nil; sessionStartThermal = nil; sessionWorstThermal = nil
         persistEventsNow()
     }
 
     private func recordPerformanceSample(stage: String = "PERFORMANCE_SAMPLE") {
         guard let id = performanceSessionID else { return }
         let elapsed = performanceStartedAt.map { Date().timeIntervalSince($0) } ?? 0
+        if let memory = Self.residentMemoryBytes() {
+            sessionPeakMemory = max(sessionPeakMemory ?? memory, memory)
+        }
+        let currentThermal = Self.thermalStateName(ProcessInfo.processInfo.thermalState)
+        if Self.thermalRank(currentThermal) > Self.thermalRank(sessionWorstThermal ?? "UNKNOWN") {
+            sessionWorstThermal = currentThermal
+        }
         record(operationID: id, model: performanceModel, stage: stage,
                message: String(format: "Runtime sample at +%.1fs. Mode: %@.", elapsed, performanceMode ?? "UNKNOWN"))
     }
 
     private func captureThermalTransition() {
         let state = Self.thermalStateName(ProcessInfo.processInfo.thermalState)
+        if Self.thermalRank(state) > Self.thermalRank(sessionWorstThermal ?? "UNKNOWN") {
+            sessionWorstThermal = state
+        }
         record(operationID: performanceSessionID, model: performanceModel, stage: "THERMAL_STATE_CHANGED",
                message: "iOS thermal state changed to \(state).", level: state == "SERIOUS" || state == "CRITICAL" ? "WARNING" : "INFO")
+    }
+
+    private func classifyCompletedSession(operationID: String) {
+        let sessionEvents = events.filter { $0.operationID == operationID }
+        let peak = sessionEvents.compactMap(\.residentMemoryBytes).max() ?? sessionPeakMemory
+        let first = sessionStartMemory
+        let worst = sessionWorstThermal ?? sessionEvents.compactMap(\.thermalState).max(by: { Self.thermalRank($0) < Self.thermalRank($1) }) ?? "UNKNOWN"
+        var findings: [String] = []
+
+        if worst == "SERIOUS" || worst == "CRITICAL" {
+            findings.append("Elevated iOS thermal pressure was observed (\(worst)). This can coincide with reduced system performance; the trace alone does not prove it caused a slowdown.")
+        }
+        if let first, let peak {
+            let growth = Int64(peak) - Int64(first)
+            if growth > 500_000_000 {
+                findings.append(String(format: "Resident memory increased by at least %.2f GB during the session. Review model residency, swapping, caches, and temporary allocations.", Double(growth) / 1_000_000_000))
+            }
+        }
+        if sessionEvents.contains(where: { $0.stage.contains("ERROR") }) {
+            findings.append("An explicit application error was captured during this session; inspect the ERROR event and its neighboring checkpoints.")
+        }
+        if sessionEvents.contains(where: { $0.stage == "BENCHMARK_STILL_RUNNING" }) {
+            findings.append("The on-device benchmark exceeded the 20-second stall checkpoint.")
+        }
+        if findings.isEmpty {
+            findings.append("No high-confidence thermal, large-memory-growth, explicit-error, or benchmark-stall signal was captured. This does not rule out UI/render, inference, I/O, or OS-level issues.")
+        }
+
+        record(operationID: operationID, model: performanceModel, stage: "DIAGNOSTIC_CLASSIFICATION",
+               message: findings.joined(separator: " "), level: findings.count > 1 || worst == "SERIOUS" || worst == "CRITICAL" ? "WARNING" : "INFO")
     }
 
     /// Complete, untruncated text report for debugging/export.
@@ -382,6 +439,16 @@ final class SenseiDiagnostics: ObservableObject {
 
     private var activeOperationURL: URL {
         diagnosticsDirectory.appendingPathComponent("active-model-load.json")
+    }
+
+    private static func thermalRank(_ state: String) -> Int {
+        switch state {
+        case "NOMINAL": return 0
+        case "FAIR": return 1
+        case "SERIOUS": return 2
+        case "CRITICAL": return 3
+        default: return -1
+        }
     }
 
     private static func thermalStateName(_ state: ProcessInfo.ThermalState) -> String {
