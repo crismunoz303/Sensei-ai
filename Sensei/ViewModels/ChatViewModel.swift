@@ -564,7 +564,7 @@ final class ChatViewModel: ObservableObject {
                     _ = try await ai.replyWithImage(to: modelPrompt, imageURL: imageURL) { chunk in
                         guard !chunk.isEmpty, !Task.isCancelled else { return }
                         streamedText += chunk
-                        self.thinkingStatus = "Analyzing image locally…"
+                        if self.thinkingStatus != "Analyzing image locally…" { self.thinkingStatus = "Analyzing image locally…" }
                         if !receivedFirstChunk {
                             receivedFirstChunk = true
                             SenseiDiagnostics.shared.markFirstOutput(operationID: operationID)
@@ -601,9 +601,9 @@ final class ChatViewModel: ObservableObject {
                     streamedText += chunk
                     // Report only observable runtime state. Do not invent a
                     // semantic description of the model's private reasoning.
-                    self.thinkingStatus = "Generating locally…"
+                    if self.thinkingStatus != "Generating locally…" { self.thinkingStatus = "Generating locally…" }
                     if streamedText.range(of: "</think>", options: .caseInsensitive) != nil {
-                        self.thinkingStatus = "Writing response…"
+                        if self.thinkingStatus != "Writing response…" { self.thinkingStatus = "Writing response…" }
                     }
 
                     if let visibleText = Self.liveAnswerText(streamedText),
