@@ -361,6 +361,7 @@ final class ChatViewModel: ObservableObject {
             defer { stallWatch.cancel() }
             do {
                 benchmarkResult = try await ai.benchmarkCurrent(loadSeconds: lastLoadSeconds, operationID: operationID)
+                SenseiDiagnostics.shared.markFirstOutput(operationID: operationID)
                 SenseiDiagnostics.shared.record(
                     operationID: operationID,
                     model: loadedModel?.name,
@@ -368,7 +369,9 @@ final class ChatViewModel: ObservableObject {
                     message: "Benchmark returned a response.",
                     level: "SUCCESS"
                 )
+                SenseiDiagnostics.shared.stopPerformanceSession(outcome: "SUCCESS")
             } catch {
+                SenseiDiagnostics.shared.stopPerformanceSession(outcome: "ERROR")
                 benchmarkError = error.localizedDescription
                 SenseiDiagnostics.shared.record(
                     operationID: operationID,
