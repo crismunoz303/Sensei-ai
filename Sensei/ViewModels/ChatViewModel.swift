@@ -551,26 +551,63 @@ final class ChatViewModel: ObservableObject {
 
             var streamedText = ""
             var receivedFirstChunk = false
-
+            var webSources: [WebSearchResult] = []
 
             do {
                 let memoryContext = SenseiMemoryStore.shared.context(for: effectivePrompt)
-                let modelPrompt: String
-                if let memoryContext {
-                    modelPrompt = """
-                    \(memoryContext)
+                var contextSections: [String] = []
 
-                    CURRENT USER REQUEST
-                    \(effectivePrompt)
-                    """
+                if let memoryContext {
+                    contextSections.append(memoryContext)
                     SenseiDiagnostics.shared.record(
                         operationID: operationID,
                         model: loadedModel?.name,
                         stage: "MEMORY_CONTEXT_ATTACHED",
                         message: "Relevant persistent local memories were attached to this generation."
                     )
-                } else {
+                }
+
+                if webEnabled && imageURL == nil {
+                    thinkingStatus = "Searching the web…"
+                    SenseiDiagnostics.shared.record(
+                        operationID: operationID,
+                        model: loadedModel?.name,
+                        stage: "WEB_SEARCH_STARTED",
+                        message: "Web research started for the current user request."
+                    )
+                    do {
+                        webSources = try await web.search(effectivePrompt, limit: 5)
+                        contextSections.append(await web.contextBlock(for: webSources))
+                        SenseiDiagnostics.shared.record(
+                            operationID: operationID,
+                            model: loadedModel?.name,
+                            stage: "WEB_SEARCH_COMPLETE",
+                            message: "Web research returned \(webSources.count) source results.",
+                            level: "SUCCESS"
+                        )
+                    } catch {
+                        SenseiDiagnostics.shared.record(
+                            operationID: operationID,
+                            model: loadedModel?.name,
+                            stage: "WEB_SEARCH_ERROR",
+                            message: error.localizedDescription,
+                            level: "WARNING"
+                        )
+                    }
+                }
+
+                let modelPrompt: String
+                if contextSections.isEmpty {
                     modelPrompt = effectivePrompt
+                } else {
+                    modelPrompt = """
+                    \(contextSections.joined(separator: "\n\n"))
+
+                    CURRENT USER REQUEST
+                    \(effectivePrompt)
+
+                    If WEB RESEARCH is present above, use it only when relevant, cite factual web-derived claims with [number], and do not invent sources.
+                    """
                 }
 
                 if let imageURL {
