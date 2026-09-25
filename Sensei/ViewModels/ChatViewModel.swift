@@ -21,11 +21,13 @@ final class ChatViewModel: ObservableObject {
     @Published var isRunningBenchmark = false
     @Published var collaborationMode = false
     @Published var individualMode = false
-    @Published var pendingImageURL: URL?\n    @Published var webEnabled = false
+    @Published var pendingImageURL: URL?
+    @Published var webEnabled = false
 
     private let ai = SenseiAI.shared
     private let downloads = BackgroundModelDownloadManager.shared
-    private let store = ConversationStore()\n    private let web = WebResearchService.shared
+    private let store = ConversationStore()
+    private let web = WebResearchService.shared
     private let defaults = UserDefaults.standard
     private var lastLoadSeconds: Double = 0
     private var lastProgressSample: (date: Date, progress: Double)?
@@ -113,6 +115,7 @@ final class ChatViewModel: ObservableObject {
             }
         }
 
+        webEnabled = defaults.bool(forKey: "sensei.webEnabled")
         refreshDownloadState()
 
         // A downloaded model survives app restarts, but an MLX model in RAM does not.
@@ -143,7 +146,18 @@ final class ChatViewModel: ObservableObject {
         refreshDownloadState()
     }
 
-    func setWebEnabled(_ enabled: Bool) {\n        webEnabled = enabled\n        defaults.set(enabled, forKey: "sensei.webEnabled")\n        SenseiDiagnostics.shared.record(\n            model: loadedModel?.name,\n            stage: enabled ? "WEB_ENABLED" : "WEB_DISABLED",\n            message: enabled ? "Web research is enabled for chat." : "Web research is disabled for chat.",\n            level: "INFO"\n        )\n    }\n\n    func activateFastMode() {
+    func setWebEnabled(_ enabled: Bool) {
+        webEnabled = enabled
+        defaults.set(enabled, forKey: "sensei.webEnabled")
+        SenseiDiagnostics.shared.record(
+            model: loadedModel?.name,
+            stage: enabled ? "WEB_ENABLED" : "WEB_DISABLED",
+            message: enabled ? "Web research is enabled for chat." : "Web research is disabled for chat.",
+            level: "INFO"
+        )
+    }
+
+    func activateFastMode() {
         collaborationMode = false
         individualMode = false
     }
@@ -667,7 +681,11 @@ final class ChatViewModel: ObservableObject {
                 }
                 if !webSources.isEmpty {
                     let sourceLines = webSources.map { "[\($0.id)] \($0.title) — \($0.url.absoluteString)" }
-                    completedText += "\n\nSources:\n" + sourceLines.joined(separator: "\n")
+                    completedText += "
+
+Sources:
+" + sourceLines.joined(separator: "
+")
                 }
 
                 if let index = messages.firstIndex(where: { $0.id == responseID }) {
