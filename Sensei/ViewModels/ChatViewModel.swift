@@ -21,11 +21,11 @@ final class ChatViewModel: ObservableObject {
     @Published var isRunningBenchmark = false
     @Published var collaborationMode = false
     @Published var individualMode = false
-    @Published var pendingImageURL: URL?
+    @Published var pendingImageURL: URL?\n    @Published var webEnabled = false
 
     private let ai = SenseiAI.shared
     private let downloads = BackgroundModelDownloadManager.shared
-    private let store = ConversationStore()
+    private let store = ConversationStore()\n    private let web = WebResearchService.shared
     private let defaults = UserDefaults.standard
     private var lastLoadSeconds: Double = 0
     private var lastProgressSample: (date: Date, progress: Double)?
@@ -143,7 +143,7 @@ final class ChatViewModel: ObservableObject {
         refreshDownloadState()
     }
 
-    func activateFastMode() {
+    func setWebEnabled(_ enabled: Bool) {\n        webEnabled = enabled\n        defaults.set(enabled, forKey: "sensei.webEnabled")\n        SenseiDiagnostics.shared.record(\n            model: loadedModel?.name,\n            stage: enabled ? "WEB_ENABLED" : "WEB_DISABLED",\n            message: enabled ? "Web research is enabled for chat." : "Web research is disabled for chat.",\n            level: "INFO"\n        )\n    }\n\n    func activateFastMode() {
         collaborationMode = false
         individualMode = false
     }
@@ -665,6 +665,11 @@ final class ChatViewModel: ObservableObject {
                         level: "ERROR"
                     )
                 }
+                if !webSources.isEmpty {
+                    let sourceLines = webSources.map { "[\($0.id)] \($0.title) — \($0.url.absoluteString)" }
+                    completedText += "\n\nSources:\n" + sourceLines.joined(separator: "\n")
+                }
+
                 if let index = messages.firstIndex(where: { $0.id == responseID }) {
                     messages[index] = ChatMessage(
                         id: responseID,
