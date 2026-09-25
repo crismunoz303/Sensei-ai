@@ -681,11 +681,7 @@ final class ChatViewModel: ObservableObject {
                 }
                 if !webSources.isEmpty {
                     let sourceLines = webSources.map { "[\($0.id)] \($0.title) — \($0.url.absoluteString)" }
-                    completedText += "
-
-Sources:
-" + sourceLines.joined(separator: "
-")
+                    completedText += "\n\nSources:\n" + sourceLines.joined(separator: "\n")
                 }
 
                 if let index = messages.firstIndex(where: { $0.id == responseID }) {
