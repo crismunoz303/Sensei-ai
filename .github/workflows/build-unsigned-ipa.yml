@@ -3,7 +3,7 @@ name: Build SENSEI unsigned IPA
 on:
   workflow_dispatch:
   push:
-    branches: [ main, sensei-local-persistence-drive, sensei-next-revision, sensei-v14-learning ]
+    branches: [ main, sensei-local-persistence-drive, sensei-next-revision, sensei-v14-learning, sensei-v14-web ]
   pull_request:
     branches: [ main ]
 
@@ -74,7 +74,7 @@ jobs:
           rm -rf Payload
           mkdir -p Payload
           cp -R build/Build/Products/Release-iphoneos/SENSEI.app Payload/
-          zip -r SENSEI-V14-DIAGNOSTICS.ipa Payload
+          zip -r SENSEI-V14-WEB.ipa Payload
           unzip -t SENSEI-V14-DIAGNOSTICS.ipa
           test -f Payload/SENSEI.app/Info.plist
           test -x Payload/SENSEI.app/SENSEI
@@ -82,5 +82,5 @@ jobs:
       - name: Upload IPA
         uses: actions/upload-artifact@v4
         with:
-          name: SENSEI-V14-DIAGNOSTICS
+          name: SENSEI-V14-WEB
           path: SENSEI-V14-DIAGNOSTICS.ipa
