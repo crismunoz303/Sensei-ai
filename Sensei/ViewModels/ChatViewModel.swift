@@ -692,7 +692,7 @@ final class ChatViewModel: ObservableObject {
 
                 try Task.checkCancellation()
                 let finalVisibleText = Self.completedAnswerText(streamedText)
-                let completedText: String
+                var completedText: String
                 if let finalVisibleText {
                     if finalVisibleText.isEmpty {
                         completedText = "SENSEI completed generation but returned no answer."
