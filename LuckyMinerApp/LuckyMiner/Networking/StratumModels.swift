@@ -19,3 +19,26 @@ enum StratumConnectionState: Equatable {
     case authorized
     case failed(String)
 }
+
+struct StratumJob: Equatable, Sendable {
+    let jobId: String
+    let prevHash: String
+    let coinbase1: String
+    let coinbase2: String
+    let merkleBranches: [String]
+    let version: String
+    let nbits: String
+    let ntime: String
+    let cleanJobs: Bool
+    let generation: UInt64
+}
+
+struct StratumShare: Sendable {
+    let worker: String
+    let jobId: String
+    let extraNonce2: String
+    let ntime: String
+    let nonce: String
+    let hashHex: String
+    let blockCandidate: Bool
+}
