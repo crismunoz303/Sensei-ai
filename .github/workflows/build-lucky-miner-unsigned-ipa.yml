@@ -2,16 +2,6 @@ name: Build Lucky Miner unsigned IPA
 
 on:
   workflow_dispatch:
-  push:
-    branches: [ lucky-miner-v0.1 ]
-    paths:
-      - "LuckyMinerApp/**"
-      - ".github/workflows/build-lucky-miner-unsigned-ipa.yml"
-  pull_request:
-    branches: [ main ]
-    paths:
-      - "LuckyMinerApp/**"
-      - ".github/workflows/build-lucky-miner-unsigned-ipa.yml"
 
 jobs:
   build:
