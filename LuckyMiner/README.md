@@ -17,3 +17,5 @@ Stratum V1 client integration, payout-address settings, real mining.notify job c
 
 ## Build
 The GitHub workflow creates an unsigned IPA. The IPA is intended to be signed externally before installation.
+
+Build trigger: v0.1 initial unsigned IPA validation.
