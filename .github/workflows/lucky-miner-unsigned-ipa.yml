@@ -1,0 +1,59 @@
+name: Lucky Miner Unsigned IPA
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - lucky-miner-v0.1
+    paths:
+      - "LuckyMiner/**"
+      - ".github/workflows/lucky-miner-unsigned-ipa.yml"
+
+jobs:
+  build:
+    runs-on: macos-15
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install XcodeGen
+        run: brew install xcodegen
+
+      - name: Generate Xcode project
+        working-directory: LuckyMiner
+        run: xcodegen generate
+
+      - name: Build unsigned app
+        working-directory: LuckyMiner
+        run: |
+          set -euo pipefail
+          xcodebuild \
+            -project LuckyMiner.xcodeproj \
+            -scheme LuckyMiner \
+            -configuration Release \
+            -sdk iphoneos \
+            -derivedDataPath build \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_IDENTITY="" \
+            clean build
+
+      - name: Package unsigned IPA
+        working-directory: LuckyMiner
+        run: |
+          set -euo pipefail
+          APP="build/Build/Products/Release-iphoneos/LuckyMiner.app"
+          test -d "$APP"
+          rm -rf Payload LuckyMiner-v0.1-unsigned.ipa
+          mkdir Payload
+          cp -R "$APP" Payload/LuckyMiner.app
+          zip -qry LuckyMiner-v0.1-unsigned.ipa Payload
+
+      - name: Upload IPA
+        uses: actions/upload-artifact@v4
+        with:
+          name: LuckyMiner-v0.1-unsigned
+          path: LuckyMiner/LuckyMiner-v0.1-unsigned.ipa
+          if-no-files-found: error
