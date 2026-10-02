@@ -8,15 +8,15 @@ enum MiningMode: String, CaseIterable, Identifiable {
     var id: String { rawValue }
 
     func requestedWorkers(coreCount: Int) -> Int {
-        let cores = max(1, coreCount)
+        let cores = Swift.max(1, coreCount)
 
         switch self {
         case .eco:
             return 1
         case .balanced:
-            return max(1, cores / 2)
+            return Swift.max(1, cores / 2)
         case .max:
-            return max(1, cores - 1)
+            return Swift.max(1, cores - 1)
         }
     }
 }
