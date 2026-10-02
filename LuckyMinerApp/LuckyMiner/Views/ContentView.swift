@@ -20,7 +20,8 @@ struct ContentView: View {
             ScrollView {
                 VStack(spacing: 16) {
                     hero
-                    stats
+                    miningStats
+                    shareStats
                     thermalCard
                     poolCard
                     controls
@@ -45,6 +46,14 @@ struct ContentView: View {
             Text(miner.status)
                 .font(.footnote)
                 .foregroundStyle(.secondary)
+                .multilineTextAlignment(.center)
+
+            if !miner.activeJobId.isEmpty {
+                Text("Job " + miner.activeJobId)
+                    .font(.caption2.monospaced())
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+            }
         }
         .frame(maxWidth: .infinity)
         .padding(.vertical, 24)
@@ -54,12 +63,41 @@ struct ContentView: View {
         )
     }
 
-    private var stats: some View {
+    private var miningStats: some View {
         HStack(spacing: 12) {
             stat("Hashes", value: compact(miner.totalHashes))
             stat("Best", value: "\(miner.bestZeroBits) bits")
             stat("Workers", value: "\(miner.workerCount)")
         }
+    }
+
+    private var shareStats: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Label("Pool shares", systemImage: "checkmark.seal")
+                .font(.headline)
+
+            HStack(spacing: 12) {
+                stat("Submitted", value: "\(stratum.submittedShares)")
+                stat("Accepted", value: "\(stratum.acceptedShares)")
+                stat("Rejected", value: "\(stratum.rejectedShares)")
+            }
+
+            HStack {
+                Text("Block candidates")
+                Spacer()
+                Text("\(miner.blockCandidates)")
+                    .font(.subheadline.monospacedDigit())
+            }
+
+            Text(stratum.lastShareResult)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        }
+        .padding()
+        .background(
+            .background,
+            in: RoundedRectangle(cornerRadius: 18)
+        )
     }
 
     private func stat(_ title: String, value: String) -> some View {
@@ -76,7 +114,7 @@ struct ContentView: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(12)
         .background(
-            .background,
+            Color(.secondarySystemGroupedBackground),
             in: RoundedRectangle(cornerRadius: 16)
         )
     }
@@ -146,13 +184,21 @@ struct ContentView: View {
                     .textFieldStyle(.roundedBorder)
             }
 
+            SecureField("Password", text: $poolPassword)
+                .textInputAutocapitalization(.never)
+                .autocorrectionDisabled()
+                .textFieldStyle(.roundedBorder)
+
             HStack {
                 Button(
                     stratum.state == .authorized
                         ? "Disconnect"
-                        : "Test pool connection"
+                        : "Connect pool"
                 ) {
                     if stratum.state == .authorized {
+                        if miner.isRunning {
+                            miner.stop(reason: "Stopped")
+                        }
                         stratum.disconnect()
                     } else {
                         stratum.connect(
@@ -178,11 +224,30 @@ struct ContentView: View {
                 }
             }
 
-            Text(
-                "v0.1 performs a real subscribe/authorize handshake. Pool job hashing + share submission is the next milestone and is not faked here."
-            )
-            .font(.caption2)
-            .foregroundStyle(.secondary)
+            if let job = stratum.currentJob {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Live work received")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(.green)
+
+                    Text(
+                        "Job " + job.jobId +
+                        " · nTime " + job.ntime +
+                        " · nBits " + job.nbits
+                    )
+                    .font(.caption2.monospaced())
+                    .foregroundStyle(.secondary)
+                    .lineLimit(2)
+                }
+            } else {
+                Text(
+                    stratum.state == .authorized
+                        ? "Authorized — waiting for mining.notify"
+                        : "Connect a Bitcoin SHA-256d Stratum V1 pool to receive real work."
+                )
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+            }
         }
         .padding()
         .background(
@@ -207,12 +272,13 @@ struct ContentView: View {
                 } else {
                     miner.start(
                         mode: mode,
-                        governor: governor
+                        governor: governor,
+                        stratum: stratum
                     )
                 }
             } label: {
                 Label(
-                    miner.isRunning ? "STOP HASHING" : "START HASHING",
+                    miner.isRunning ? "STOP MINING" : "START MINING",
                     systemImage: miner.isRunning ? "stop.fill" : "bolt.fill"
                 )
                 .frame(maxWidth: .infinity)
@@ -220,12 +286,19 @@ struct ContentView: View {
             }
             .buttonStyle(.borderedProminent)
             .tint(miner.isRunning ? .red : .accentColor)
+            .disabled(!miner.isRunning && stratum.state != .authorized)
+
+            if stratum.state != .authorized && !miner.isRunning {
+                Text("Authorize a pool connection before mining.")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+            }
         }
     }
 
     private var disclosure: some View {
         Text(
-            "This is a lottery-style Bitcoin miner. An iPhone is extraordinarily unlikely to find a Bitcoin block. v0.1 never displays simulated BTC earnings or fake accepted shares. Keep the app in the foreground while hashing; iOS may suspend CPU work in the background."
+            "Lucky Miner v0.2 builds real Bitcoin SHA-256d work from Stratum mining.notify jobs and submits hashes that meet the pool target with mining.submit. Accepted/rejected counters come only from pool responses. An iPhone remains extraordinarily unlikely to find a full Bitcoin block. Keep the app in the foreground; iOS may suspend CPU work in the background."
         )
         .font(.caption)
         .foregroundStyle(.secondary)
@@ -255,8 +328,8 @@ struct ContentView: View {
             return "Subscribed"
         case .authorized:
             return "Authorized"
-        case .failed:
-            return "Failed"
+        case .failed(let message):
+            return "Failed: " + message
         }
     }
 
