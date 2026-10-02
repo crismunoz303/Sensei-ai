@@ -2,6 +2,11 @@ name: Build Lucky Miner unsigned IPA
 
 on:
   workflow_dispatch:
+  push:
+    branches: [ lucky-miner-v0.1 ]
+    paths:
+      - "LuckyMinerApp/**"
+      - ".github/workflows/build-lucky-miner-unsigned-ipa.yml"
 
 jobs:
   build:
@@ -11,6 +16,11 @@ jobs:
         working-directory: LuckyMinerApp
     steps:
       - uses: actions/checkout@v4
+      - name: Validate SHA-256d Stratum header construction
+        run: |
+          mkdir -p build
+          swiftc             LuckyMiner/Core/SHA256.swift             LuckyMiner/Core/StratumWork.swift             LuckyMiner/Networking/StratumModels.swift             scripts/stratum-vector/main.swift             -o build/stratum-vector
+          build/stratum-vector
       - name: Install XcodeGen
         run: brew install xcodegen
       - name: Generate Xcode project
@@ -26,9 +36,9 @@ jobs:
           rm -rf Payload
           mkdir -p Payload
           cp -R "$APP" Payload/
-          ditto -c -k --sequesterRsrc --keepParent Payload LuckyMiner-unsigned.ipa
+          ditto -c -k --sequesterRsrc --keepParent Payload LuckyMiner-v0.2-unsigned.ipa
       - uses: actions/upload-artifact@v4
         with:
-          name: LuckyMiner-unsigned-ipa
-          path: LuckyMinerApp/LuckyMiner-unsigned.ipa
+          name: LuckyMiner-v0.2-unsigned-ipa
+          path: LuckyMinerApp/LuckyMiner-v0.2-unsigned.ipa
           if-no-files-found: error
