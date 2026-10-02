@@ -57,8 +57,8 @@ struct ContentView: View {
     private var stats: some View {
         HStack(spacing: 12) {
             stat("Hashes", value: compact(miner.totalHashes))
-            stat("Best", value: "(miner.bestZeroBits) bits")
-            stat("Workers", value: "(miner.workerCount)")
+            stat("Best", value: "\(miner.bestZeroBits) bits")
+            stat("Workers", value: "\(miner.workerCount)")
         }
     }
 
@@ -83,11 +83,8 @@ struct ContentView: View {
 
     private var thermalCard: some View {
         VStack(alignment: .leading, spacing: 12) {
-            Label(
-                "Phone protection",
-                systemImage: "thermometer.medium"
-            )
-            .font(.headline)
+            Label("Phone protection", systemImage: "thermometer.medium")
+                .font(.headline)
 
             HStack {
                 Text("Thermal")
@@ -101,7 +98,7 @@ struct ContentView: View {
                 Spacer()
                 Text(
                     governor.batteryLevel >= 0
-                        ? "(Int(governor.batteryLevel * 100))%"
+                        ? "\(Int(governor.batteryLevel * 100))%"
                         : "—"
                 )
             }
@@ -139,21 +136,14 @@ struct ContentView: View {
                 .textFieldStyle(.roundedBorder)
 
             HStack {
-                TextField(
-                    "Port",
-                    value: $poolPort,
-                    format: .number
-                )
-                .keyboardType(.numberPad)
-                .textFieldStyle(.roundedBorder)
+                TextField("Port", value: $poolPort, format: .number)
+                    .keyboardType(.numberPad)
+                    .textFieldStyle(.roundedBorder)
 
-                TextField(
-                    "Worker / BTC username",
-                    text: $poolUser
-                )
-                .textInputAutocapitalization(.never)
-                .autocorrectionDisabled()
-                .textFieldStyle(.roundedBorder)
+                TextField("Worker / BTC username", text: $poolUser)
+                    .textInputAutocapitalization(.never)
+                    .autocorrectionDisabled()
+                    .textFieldStyle(.roundedBorder)
             }
 
             HStack {
@@ -181,7 +171,7 @@ struct ContentView: View {
 
                 if stratum.currentDifficulty > 0 {
                     Text(
-                        "Diff (stratum.currentDifficulty, specifier: "%.3g")"
+                        "Diff \(stratum.currentDifficulty, specifier: "%.3g")"
                     )
                     .font(.caption.monospacedDigit())
                     .foregroundStyle(.secondary)
@@ -222,22 +212,14 @@ struct ContentView: View {
                 }
             } label: {
                 Label(
-                    miner.isRunning
-                        ? "STOP HASHING"
-                        : "START HASHING",
-                    systemImage: miner.isRunning
-                        ? "stop.fill"
-                        : "bolt.fill"
+                    miner.isRunning ? "STOP HASHING" : "START HASHING",
+                    systemImage: miner.isRunning ? "stop.fill" : "bolt.fill"
                 )
                 .frame(maxWidth: .infinity)
                 .padding(.vertical, 8)
             }
             .buttonStyle(.borderedProminent)
-            .tint(
-                miner.isRunning
-                    ? .red
-                    : .accentColor
-            )
+            .tint(miner.isRunning ? .red : .accentColor)
         }
     }
 
@@ -292,47 +274,29 @@ struct ContentView: View {
 
     private func formatRate(_ rate: Double) -> String {
         if rate >= 1_000_000 {
-            return String(
-                format: "%.2f MH/s",
-                rate / 1_000_000
-            )
+            return String(format: "%.2f MH/s", rate / 1_000_000)
         }
 
         if rate >= 1_000 {
-            return String(
-                format: "%.2f kH/s",
-                rate / 1_000
-            )
+            return String(format: "%.2f kH/s", rate / 1_000)
         }
 
-        return String(
-            format: "%.0f H/s",
-            rate
-        )
+        return String(format: "%.0f H/s", rate)
     }
 
     private func compact(_ value: UInt64) -> String {
         if value >= 1_000_000_000 {
-            return String(
-                format: "%.2fB",
-                Double(value) / 1_000_000_000
-            )
+            return String(format: "%.2fB", Double(value) / 1_000_000_000)
         }
 
         if value >= 1_000_000 {
-            return String(
-                format: "%.2fM",
-                Double(value) / 1_000_000
-            )
+            return String(format: "%.2fM", Double(value) / 1_000_000)
         }
 
         if value >= 1_000 {
-            return String(
-                format: "%.1fK",
-                Double(value) / 1_000
-            )
+            return String(format: "%.1fK", Double(value) / 1_000)
         }
 
-        return "(value)"
+        return "\(value)"
     }
 }
