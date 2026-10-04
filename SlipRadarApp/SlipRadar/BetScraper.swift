@@ -38,7 +38,7 @@ struct WebTextLoader: UIViewRepresentable {
         }
 
         func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
-            DispatchQueue.main.asyncAfter(deadline: .now() + 2.2) {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 2.5) {
                 webView.evaluateJavaScript("document.body ? document.body.innerText : ''") { result, error in
                     if let error {
                         self.onError(error)
@@ -64,11 +64,28 @@ struct WebTextLoader: UIViewRepresentable {
 }
 
 enum BetTextParser {
-    static func parse(_ text: String) -> [PopularBet] {
-        let lines = text
-            .components(separatedBy: .newlines)
+    static func parse(_ text: String, source: BetSource) -> [PopularBet] {
+        switch source {
+        case .action:
+            return parseAction(text)
+        case .draftKings:
+            return parseDraftKings(text)
+        }
+    }
+
+    private static func cleanLines(_ text: String) -> [String] {
+        text.components(separatedBy: .newlines)
             .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
             .filter { !$0.isEmpty }
+    }
+
+    private static func percent(_ value: String) -> Int? {
+        let cleaned = value.replacingOccurrences(of: "%", with: "")
+        return Int(cleaned)
+    }
+
+    private static func parseAction(_ text: String) -> [PopularBet] {
+        let lines = cleanLines(text)
 
         let matchupRegex = try! NSRegularExpression(
             pattern: #"^(.+?)\s+([A-Z]{2,4})\s+\d+\s+(.+?)\s+([A-Z]{2,4})\s+\d+$"#
@@ -94,19 +111,18 @@ enum BetTextParser {
             let team2 = ns.substring(with: match.range(at: 3))
             let abbr2 = ns.substring(with: match.range(at: 4))
 
-            var startTime = ""
+            var startTime = "Today"
             var betSplit: (Int, Int)?
             var moneySplit: (Int, Int)?
             var cursor = index + 1
-            let upperBound = min(lines.count, index + 8)
+            let upperBound = min(lines.count, index + 10)
 
             while cursor < upperBound {
                 let candidate = lines[cursor]
                 let candidateNS = candidate as NSString
                 let candidateRange = NSRange(location: 0, length: candidateNS.length)
 
-                if startTime.isEmpty,
-                   timeRegex.firstMatch(in: candidate, range: candidateRange) != nil {
+                if timeRegex.firstMatch(in: candidate, range: candidateRange) != nil {
                     startTime = candidate
                 } else if let p = percentRegex.firstMatch(in: candidate, range: candidateRange) {
                     let first = Int(candidateNS.substring(with: p.range(at: 1))) ?? 0
@@ -121,36 +137,117 @@ enum BetTextParser {
             }
 
             if let betSplit {
-                let chooseFirst = betSplit.0 >= betSplit.1
-                let betPct = chooseFirst ? betSplit.0 : betSplit.1
-                let moneyPct = moneySplit.map { chooseFirst ? $0.0 : $0.1 }
-                let diff = moneyPct.map { $0 - betPct }
+                for firstSide in [true, false] {
+                    let betPct = firstSide ? betSplit.0 : betSplit.1
+                    let moneyPct = moneySplit.map { firstSide ? $0.0 : $0.1 }
+                    let diff = moneyPct.map { $0 - betPct }
 
-                bets.append(PopularBet(
-                    matchup: "\(team1) vs \(team2)",
-                    side: chooseFirst ? abbr1 : abbr2,
-                    startTime: startTime.isEmpty ? "Today" : startTime,
-                    betsPercent: betPct,
-                    moneyPercent: moneyPct,
-                    splitDifference: diff
+                    bets.append(PopularBet(
+                        source: .action,
+                        matchup: "\(team1) vs \(team2)",
+                        side: firstSide ? abbr1 : abbr2,
+                        market: "Side",
+                        startTime: startTime,
+                        betsPercent: betPct,
+                        moneyPercent: moneyPct,
+                        splitDifference: diff
+                    ))
+                }
+            }
+
+            index += 1
+        }
+
+        return dedupe(bets)
+    }
+
+    private static func parseDraftKings(_ text: String) -> [PopularBet] {
+        let lines = cleanLines(text)
+        var results: [PopularBet] = []
+        var index = 0
+
+        while index < lines.count {
+            let matchup = lines[index]
+            guard matchup.contains(" @ ") || matchup.contains(" vs ") else {
+                index += 1
+                continue
+            }
+
+            var end = index + 1
+            while end < lines.count {
+                let line = lines[end]
+                if end > index + 1 && (line.contains(" @ ") || line.contains(" vs ")) {
+                    break
+                }
+                end += 1
+            }
+
+            let segment = Array(lines[index..<end])
+            let startTime = segment.dropFirst().first(where: { $0.contains("/") && ($0.uppercased().contains("AM") || $0.uppercased().contains("PM")) }) ?? "Today"
+
+            for marketName in ["Moneyline", "Spread", "Run Line", "Total"] {
+                guard let marketIndex = segment.firstIndex(of: marketName) else { continue }
+                let normalizedMarket = marketName == "Run Line" ? "Spread" : marketName
+                let marketEnd = segment[(marketIndex + 1)...].firstIndex(where: { ["Moneyline", "Spread", "Run Line", "Total"].contains($0) }) ?? segment.endIndex
+                let marketLines = Array(segment[(marketIndex + 1)..<marketEnd])
+                results.append(contentsOf: parseDraftKingsMarket(
+                    marketLines,
+                    matchup: matchup,
+                    startTime: startTime,
+                    market: normalizedMarket
                 ))
             }
 
-            index = max(index + 1, cursor - 1)
+            index = end
         }
 
-        let grouped: [String: [PopularBet]] = Dictionary(grouping: bets) { bet in
-            bet.matchup + bet.side
-        }
-        let unique: [PopularBet] = grouped.values.compactMap { group in
-            group.first
-        }
+        return dedupe(results)
+    }
 
-        return unique.sorted(by: { (lhs: PopularBet, rhs: PopularBet) -> Bool in
-            if lhs.betsPercent == rhs.betsPercent {
-                return lhs.lockScore > rhs.lockScore
+    private static func parseDraftKingsMarket(
+        _ lines: [String],
+        matchup: String,
+        startTime: String,
+        market: String
+    ) -> [PopularBet] {
+        var results: [PopularBet] = []
+        var i = 0
+        let ignored = Set(["Odds", "% Handle", "% Bets"])
+
+        while i + 3 < lines.count {
+            let option = lines[i]
+            if ignored.contains(option) {
+                i += 1
+                continue
             }
-            return lhs.betsPercent > rhs.betsPercent
-        })
+
+            let money = percent(lines[i + 2])
+            let bets = percent(lines[i + 3])
+
+            if let money, let bets, (0...100).contains(money), (0...100).contains(bets) {
+                results.append(PopularBet(
+                    source: .draftKings,
+                    matchup: matchup,
+                    side: option,
+                    market: market,
+                    startTime: startTime,
+                    betsPercent: bets,
+                    moneyPercent: money,
+                    splitDifference: money - bets
+                ))
+                i += 4
+            } else {
+                i += 1
+            }
+        }
+
+        return results
+    }
+
+    private static func dedupe(_ bets: [PopularBet]) -> [PopularBet] {
+        let grouped = Dictionary(grouping: bets) { bet in
+            "\(bet.source.rawValue)|\(bet.matchup)|\(bet.market)|\(bet.side)"
+        }
+        return grouped.values.compactMap { $0.first }
     }
 }
