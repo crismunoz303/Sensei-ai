@@ -139,14 +139,18 @@ enum BetTextParser {
             index = max(index + 1, cursor - 1)
         }
 
-        let unique = Dictionary(grouping: bets, by: { $0.matchup + $0.side })
-            .compactMap { $0.value.first }
-
-        return unique.sorted {
-            if $0.betsPercent == $1.betsPercent {
-                return $0.score > $1.score
-            }
-            return $0.betsPercent > $1.betsPercent
+        let grouped: [String: [PopularBet]] = Dictionary(grouping: bets) { bet in
+            bet.matchup + bet.side
         }
+        let unique: [PopularBet] = grouped.values.compactMap { group in
+            group.first
+        }
+
+        return unique.sorted(by: { (lhs: PopularBet, rhs: PopularBet) -> Bool in
+            if lhs.betsPercent == rhs.betsPercent {
+                return lhs.lockScore > rhs.lockScore
+            }
+            return lhs.betsPercent > rhs.betsPercent
+        })
     }
 }
