@@ -8,10 +8,30 @@ struct PopularBet: Identifiable, Hashable {
     let betsPercent: Int
     let moneyPercent: Int?
     let splitDifference: Int?
-    
-    var score: Int {
-        let moneyBoost = moneyPercent.map { max(0, $0 - betsPercent) } ?? 0
-        return min(100, betsPercent + moneyBoost)
+
+    var lockScore: Int {
+        guard let moneyPercent else { return 0 }
+        let agreement = min(betsPercent, moneyPercent)
+        let moneyEdge = max(0, moneyPercent - betsPercent)
+        return min(99, agreement + moneyEdge)
+    }
+
+    var isLock: Bool {
+        guard let moneyPercent else { return false }
+        let moneyEdge = moneyPercent - betsPercent
+        let strongConsensus = betsPercent >= 68 && moneyPercent >= 72
+        let moneyConfirmation = moneyEdge >= 3
+        let eliteConsensus = betsPercent >= 76 && moneyPercent >= 76
+        return (strongConsensus && moneyConfirmation) || eliteConsensus
+    }
+
+    var lockReason: String {
+        guard let moneyPercent else { return "Insufficient data" }
+        let edge = moneyPercent - betsPercent
+        if betsPercent >= 76 && moneyPercent >= 76 {
+            return "Elite agreement: \(betsPercent)% bets / \(moneyPercent)% money"
+        }
+        return "Money confirms public side by +\(edge)%"
     }
 }
 
@@ -22,9 +42,9 @@ enum SportFilter: String, CaseIterable, Identifiable {
     case nba = "NBA"
     case nhl = "NHL"
     case ncaaf = "NCAAF"
-    
+
     var id: String { rawValue }
-    
+
     var sourceURL: URL {
         switch self {
         case .all: return URL(string: "https://www.actionnetwork.com/public-betting/")!
@@ -40,7 +60,7 @@ enum SportFilter: String, CaseIterable, Identifiable {
 enum SlipRadarError: LocalizedError {
     case noData
     case invalidPage
-    
+
     var errorDescription: String? {
         switch self {
         case .noData: return "No public betting rows were found yet."
