@@ -4,6 +4,14 @@ enum BetSource: String, CaseIterable, Identifiable {
     case action = "Action Network"
     case draftKings = "DraftKings"
 
+    var impliedProbability: Double? {
+        OddsMath.impliedProbability(from: odds)
+    }
+
+    var displayedProbability: Int? {
+        impliedProbability.map { Int($0.rounded()) }
+    }
+
     var id: String { rawValue }
 }
 
@@ -14,6 +22,7 @@ struct PopularBet: Identifiable, Hashable {
     let side: String
     let market: String
     let startTime: String
+    let odds: String?
     let betsPercent: Int
     let moneyPercent: Int?
     let splitDifference: Int?
@@ -33,6 +42,22 @@ struct PopularBet: Identifiable, Hashable {
         let sharpMoney = moneyPercent >= 68 && edge >= 8
         let eliteConsensus = betsPercent >= 78 && moneyPercent >= 78
         return strongConsensus || sharpMoney || eliteConsensus
+    }
+
+    var impliedProbability: Double? {
+        guard let odds else { return nil }
+        return OddsMath.impliedProbability(from: odds)
+    }
+
+    var displayedProbability: Int {
+        if let impliedProbability {
+            return Int(impliedProbability.rounded())
+        }
+        return min(95, max(50, lockScore))
+    }
+
+    var probabilityLabel: String {
+        impliedProbability == nil ? "SIGNAL %" : "IMPLIED %"
     }
 
     var lockReason: String {
@@ -164,6 +189,22 @@ struct PropPick: Identifiable, Hashable {
             return String(format: "%.1f%% handle / %.1f%% bets (%+.1f%%)", handlePercent, betPercent, diff)
         }
         return "Popular public prop"
+    }
+}
+
+enum OddsMath {
+    static func impliedProbability(from odds: String) -> Double? {
+        let cleaned = odds
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .replacingOccurrences(of: "−", with: "-")
+        guard let value = Double(cleaned) else { return nil }
+        if value > 0 {
+            return 100.0 * (100.0 / (value + 100.0))
+        } else if value < 0 {
+            let absolute = abs(value)
+            return 100.0 * (absolute / (absolute + 100.0))
+        }
+        return nil
     }
 }
 
