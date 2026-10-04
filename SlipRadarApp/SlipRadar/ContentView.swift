@@ -160,56 +160,10 @@ struct ContentView: View {
 
     private func betCard(rank: Int, bet: PopularBet) -> some View {
         HStack(spacing: 14) {
-            Text("#\(rank)")
-                .font(.system(size: 15, weight: .black, design: .rounded))
-                .foregroundStyle(rank <= 3 ? Color.green : .white.opacity(0.4))
-                .frame(width: 34)
-
-            VStack(alignment: .leading, spacing: 7) {
-                HStack {
-                    Text(bet.side)
-                        .font(.system(size: 20, weight: .black, design: .rounded))
-                        .foregroundStyle(.white)
-                    Text("LOCK")
-                        .font(.system(size: 9, weight: .black))
-                        .foregroundStyle(Color.green)
-                        .padding(.horizontal, 7)
-                        .padding(.vertical, 4)
-                        .background(Color.green.opacity(0.12), in: Capsule())
-                }
-
-                Text(bet.matchup)
-                    .font(.system(size: 13, weight: .medium))
-                    .foregroundStyle(.white.opacity(0.67))
-
-                Text(bet.lockReason)
-                    .font(.system(size: 11, weight: .semibold))
-                    .foregroundStyle(Color.green.opacity(0.85))
-
-                HStack(spacing: 14) {
-                    stat("BETS", "\(bet.betsPercent)%")
-                    if let money = bet.moneyPercent {
-                        stat("MONEY", "\(money)%")
-                    }
-                    if let diff = bet.splitDifference {
-                        stat("DIFF", diff >= 0 ? "+\(diff)%" : "\(diff)%")
-                    }
-                }
-            }
-
+            rankView(rank)
+            betDetails(bet)
             Spacer()
-
-            VStack(alignment: .trailing, spacing: 7) {
-                Text("\(bet.lockScore)")
-                    .font(.system(size: 23, weight: .black, design: .rounded))
-                    .foregroundStyle(bet.lockScore >= 70 ? Color.green : .white)
-                Text("LOCK SCORE")
-                    .font(.system(size: 9, weight: .bold))
-                    .foregroundStyle(.white.opacity(0.35))
-                Text(bet.startTime)
-                    .font(.system(size: 10, weight: .semibold))
-                    .foregroundStyle(.white.opacity(0.55))
-            }
+            scoreView(bet)
         }
         .padding(16)
         .background(Color.white.opacity(0.055), in: RoundedRectangle(cornerRadius: 18))
@@ -217,6 +171,71 @@ struct ContentView: View {
             RoundedRectangle(cornerRadius: 18)
                 .stroke(rank <= 3 ? Color.green.opacity(0.22) : Color.white.opacity(0.04), lineWidth: 1)
         )
+    }
+
+    private func rankView(_ rank: Int) -> some View {
+        Text("#\(rank)")
+            .font(.system(size: 15, weight: .black, design: .rounded))
+            .foregroundStyle(rank <= 3 ? Color.green : Color.white.opacity(0.4))
+            .frame(width: 34)
+    }
+
+    private func betDetails(_ bet: PopularBet) -> some View {
+        VStack(alignment: .leading, spacing: 7) {
+            HStack {
+                Text(bet.side)
+                    .font(.system(size: 20, weight: .black, design: .rounded))
+                    .foregroundStyle(.white)
+
+                Text("LOCK")
+                    .font(.system(size: 9, weight: .black))
+                    .foregroundStyle(Color.green)
+                    .padding(.horizontal, 7)
+                    .padding(.vertical, 4)
+                    .background(Color.green.opacity(0.12), in: Capsule())
+            }
+
+            Text(bet.matchup)
+                .font(.system(size: 13, weight: .medium))
+                .foregroundStyle(.white.opacity(0.67))
+
+            Text(bet.lockReason)
+                .font(.system(size: 11, weight: .semibold))
+                .foregroundStyle(Color.green.opacity(0.85))
+
+            statsRow(bet)
+        }
+    }
+
+    private func statsRow(_ bet: PopularBet) -> some View {
+        HStack(spacing: 14) {
+            stat("BETS", "\(bet.betsPercent)%")
+
+            if let money = bet.moneyPercent {
+                stat("MONEY", "\(money)%")
+            }
+
+            if let diff = bet.splitDifference {
+                let diffText = diff >= 0 ? "+\(diff)%" : "\(diff)%"
+                stat("DIFF", diffText)
+            }
+        }
+    }
+
+    private func scoreView(_ bet: PopularBet) -> some View {
+        VStack(alignment: .trailing, spacing: 7) {
+            Text("\(bet.lockScore)")
+                .font(.system(size: 23, weight: .black, design: .rounded))
+                .foregroundStyle(bet.lockScore >= 70 ? Color.green : Color.white)
+
+            Text("LOCK SCORE")
+                .font(.system(size: 9, weight: .bold))
+                .foregroundStyle(.white.opacity(0.35))
+
+            Text(bet.startTime)
+                .font(.system(size: 10, weight: .semibold))
+                .foregroundStyle(.white.opacity(0.55))
+        }
     }
 
     private func stat(_ label: String, _ value: String) -> some View {
