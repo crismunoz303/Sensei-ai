@@ -49,10 +49,10 @@ jobs:
         run: |
           mkdir -p Payload
           cp -R build/Build/Products/Release-iphoneos/SlipRadar.app Payload/
-          /usr/bin/zip -qry SlipRadar-v0.1-unsigned.ipa Payload
+          /usr/bin/zip -qry SlipRadar-v0.2-locks-unsigned.ipa Payload
 
       - name: Upload IPA
         uses: actions/upload-artifact@v4
         with:
-          name: SlipRadar-v0.1-unsigned-ipa
-          path: SlipRadarApp/SlipRadar-v0.1-unsigned.ipa
+          name: SlipRadar-v0.2-locks-unsigned-ipa
+          path: SlipRadarApp/SlipRadar-v0.2-locks-unsigned.ipa
