@@ -31,8 +31,32 @@ struct PerformanceSummary {
     let flatStakeROI: Double?
 }
 
+struct CalibrationResult {
+    let probability: Double
+    let sampleSize: Int
+    let observedWinRate: Double
+}
+
+enum SlipStore {
+    private static let storageKey = "SlipRadar.savedSlip.v09"
+
+    static func load() -> [SlipLeg] {
+        guard let data = UserDefaults.standard.data(forKey: storageKey),
+              let decoded = try? JSONDecoder().decode([SlipLeg].self, from: data) else {
+            return []
+        }
+        return decoded
+    }
+
+    static func save(_ legs: [SlipLeg]) {
+        guard let data = try? JSONEncoder().encode(legs) else { return }
+        UserDefaults.standard.set(data, forKey: storageKey)
+    }
+}
+
 enum PerformanceStore {
-    private static let storageKey = "SlipRadar.performance.v08"
+    private static let storageKey = "SlipRadar.performance.v09"
+    private static let legacyStorageKey = "SlipRadar.performance.v08"
 
     static func track(_ leg: SlipLeg) {
         var picks = load()
@@ -40,7 +64,7 @@ enum PerformanceStore {
 
         picks.append(TrackedPick(
             id: leg.id,
-            addedAt: Date(),
+            addedAt: leg.addedAt,
             title: leg.title,
             event: leg.event,
             market: leg.market,
@@ -62,11 +86,18 @@ enum PerformanceStore {
     }
 
     static func load() -> [TrackedPick] {
-        guard let data = UserDefaults.standard.data(forKey: storageKey),
-              let decoded = try? JSONDecoder().decode([TrackedPick].self, from: data) else {
-            return []
+        if let data = UserDefaults.standard.data(forKey: storageKey),
+           let decoded = try? JSONDecoder().decode([TrackedPick].self, from: data) {
+            return decoded.sorted { $0.addedAt > $1.addedAt }
         }
-        return decoded.sorted { $0.addedAt > $1.addedAt }
+
+        if let legacy = UserDefaults.standard.data(forKey: legacyStorageKey),
+           let decoded = try? JSONDecoder().decode([TrackedPick].self, from: legacy) {
+            save(decoded)
+            return decoded.sorted { $0.addedAt > $1.addedAt }
+        }
+
+        return []
     }
 
     static func summary() -> PerformanceSummary {
@@ -84,7 +115,9 @@ enum PerformanceStore {
         for pick in settledPicks {
             guard pick.outcome != .push,
                   let odds = pick.odds,
-                  let decimal = OddsMath.decimalOdds(from: odds) else { continue }
+                  let decimal = OddsMath.decimalOdds(from: odds) else {
+                continue
+            }
 
             gradedWithOdds += 1
             if pick.outcome == .win {
@@ -105,6 +138,43 @@ enum PerformanceStore {
             winRate: winRate,
             flatStakeROI: roi
         )
+    }
+
+    static func calibrate(rawProbability: Double) -> CalibrationResult? {
+        let settled = load().filter {
+            ($0.outcome == .win || $0.outcome == .loss) &&
+            $0.estimatedProbability != nil
+        }
+
+        let bucket = settled.filter { pick in
+            guard let probability = pick.estimatedProbability else { return false }
+            return abs(probability - rawProbability) <= 7.5
+        }
+
+        guard bucket.count >= 10 else { return nil }
+
+        let wins = bucket.filter { $0.outcome == .win }.count
+        let observed = Double(wins) / Double(bucket.count) * 100.0
+
+        let dataWeight = min(0.55, Double(bucket.count) / 100.0)
+        let calibrated = rawProbability * (1.0 - dataWeight) + observed * dataWeight
+
+        return CalibrationResult(
+            probability: min(99, max(1, calibrated)),
+            sampleSize: bucket.count,
+            observedWinRate: observed
+        )
+    }
+
+    static func breakdownByVerdict() -> [(label: String, count: Int, wins: Int, losses: Int, winRate: Double?)] {
+        let settled = load().filter { $0.outcome == .win || $0.outcome == .loss }
+        return PickVerdict.allCases.map { verdict in
+            let group = settled.filter { $0.verdict == verdict.rawValue }
+            let wins = group.filter { $0.outcome == .win }.count
+            let losses = group.filter { $0.outcome == .loss }.count
+            let rate = group.isEmpty ? nil : Double(wins) / Double(group.count) * 100.0
+            return (verdict.rawValue, group.count, wins, losses, rate)
+        }
     }
 
     private static func save(_ picks: [TrackedPick]) {

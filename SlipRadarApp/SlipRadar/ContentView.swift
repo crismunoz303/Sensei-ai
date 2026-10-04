@@ -5,33 +5,60 @@ struct ContentView: View {
     @State private var selectedSport: SportFilter = .all
     @State private var resultsBySource: [BetSource: [PopularBet]] = [:]
     @State private var props: [PropPick] = []
-    @State private var slip: [SlipLeg] = []
+    @State private var slip: [SlipLeg]
+
     @State private var loadingSources: Set<BetSource> = Set(BetSource.allCases)
     @State private var loadingProps = true
     @State private var refreshToken = UUID()
     @State private var lastUpdated: Date?
+
     @State private var contextText = ""
     @State private var contextLoaded = false
+
+    @State private var apiKey = SecretStore.loadOddsAPIKey()
+    @State private var liveTeamConsensus: [LiveMarketConsensus] = []
+    @State private var liveTeamLoading = false
+    @State private var liveTeamError: String?
+
+    @State private var teamProjections: [String: TeamProjection] = [:]
+    @State private var propProjections: [String: StatProjection] = [:]
+    @State private var propProjectionLoading: Set<String> = []
+    @State private var propVerifications: [String: LivePropVerification] = [:]
+    @State private var propVerificationLoading: Set<String> = []
+
+    @State private var showSettings = false
     @State private var performanceToken = UUID()
+
+    init() {
+        _slip = State(initialValue: SlipStore.load())
+    }
 
     private var board: [PopularBet] {
         resultsBySource.values.flatMap { $0 }
     }
 
+    private var liveConfigured: Bool {
+        !apiKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty &&
+        selectedSport.oddsAPISportKey != nil
+    }
+
     private var scoredBets: [ScoredBet] {
         board
             .map { bet in
-                ScoredBet(
+                let live = LiveOddsService.matchConsensus(for: bet, in: liveTeamConsensus)
+                let projection = teamProjections[MarketKey.normalized(bet.matchup)]
+                return ScoredBet(
                     bet: bet,
-                    report: DecisionEngine.report(for: bet, board: board)
+                    report: DecisionEngine.report(
+                        for: bet,
+                        board: board,
+                        liveConsensus: live,
+                        teamProjection: projection,
+                        liveConfigured: liveConfigured
+                    )
                 )
             }
-            .sorted { lhs, rhs in
-                if lhs.report.verdict.rank == rhs.report.verdict.rank {
-                    return lhs.report.evidenceScore > rhs.report.evidenceScore
-                }
-                return lhs.report.verdict.rank > rhs.report.verdict.rank
-            }
+            .sorted(by: scoredBetSort)
     }
 
     private var scoredProps: [ScoredProp] {
@@ -39,26 +66,36 @@ struct ContentView: View {
             .map { prop in
                 ScoredProp(
                     prop: prop,
-                    report: DecisionEngine.report(for: prop, contextText: contextText)
+                    report: DecisionEngine.report(
+                        for: prop,
+                        projection: propProjections[prop.id],
+                        verification: propVerifications[prop.id],
+                        contextText: contextText,
+                        liveConfigured: liveConfigured
+                    )
                 )
             }
-            .sorted { lhs, rhs in
-                if lhs.report.verdict.rank == rhs.report.verdict.rank {
-                    return lhs.report.evidenceScore > rhs.report.evidenceScore
-                }
-                return lhs.report.verdict.rank > rhs.report.verdict.rank
-            }
+            .sorted(by: scoredPropSort)
     }
 
     private var lockPicks: [ScoredBet] {
         scoredBets.filter { $0.report.verdict == .lock }
     }
 
+    private var nearMisses: [ScoredBet] {
+        scoredBets.filter {
+            $0.report.verdict == .strong || $0.report.verdict == .consider
+        }
+    }
+
     private var teamPicks: [ScoredBet] {
         scoredBets.filter { item in
             let market = item.bet.market.lowercased()
-            let isTeamMarket = market.contains("moneyline") || market.contains("spread")
-            return isTeamMarket && item.report.verdict != .pass
+            let teamMarket = market.contains("moneyline") ||
+                market.contains("spread") ||
+                market.contains("total") ||
+                market == "side"
+            return teamMarket && item.report.verdict != .pass
         }
     }
 
@@ -81,6 +118,10 @@ struct ContentView: View {
 
                 ScrollView {
                     LazyVStack(spacing: 12) {
+                        if selectedSection != .performance {
+                            liveDataPanel
+                        }
+
                         switch selectedSection {
                         case .locks:
                             locksSection
@@ -136,6 +177,12 @@ struct ContentView: View {
                 .allowsHitTesting(false)
             }
         }
+        .sheet(isPresented: $showSettings) {
+            SettingsView {
+                apiKey = SecretStore.loadOddsAPIKey()
+                refreshLiveLayers()
+            }
+        }
         .onChange(of: selectedSport) { _, _ in
             refresh()
         }
@@ -143,10 +190,8 @@ struct ContentView: View {
 
     private func sourceURL(_ source: BetSource) -> URL {
         switch source {
-        case .action:
-            return selectedSport.actionURL
-        case .draftKings:
-            return selectedSport.draftKingsURL
+        case .action: return selectedSport.actionURL
+        case .draftKings: return selectedSport.draftKingsURL
         }
     }
 
@@ -157,19 +202,29 @@ struct ContentView: View {
                     .font(.system(size: 27, weight: .black, design: .rounded))
                     .foregroundStyle(.white)
 
-                Text("DECISION ENGINE • v0.8")
+                Text("LIVE STAT MODEL • v0.9")
                     .font(.system(size: 11, weight: .bold, design: .rounded))
-                    .tracking(1.3)
+                    .tracking(1.2)
                     .foregroundStyle(Color.green)
             }
 
             Spacer()
 
+            Button {
+                showSettings = true
+            } label: {
+                Image(systemName: "gearshape.fill")
+                    .font(.system(size: 15, weight: .bold))
+                    .foregroundStyle(.white)
+                    .frame(width: 38, height: 38)
+                    .background(Color.white.opacity(0.08), in: Circle())
+            }
+
             Button(action: refresh) {
                 Image(systemName: "arrow.clockwise")
                     .font(.system(size: 16, weight: .bold))
                     .foregroundStyle(.white)
-                    .frame(width: 40, height: 40)
+                    .frame(width: 38, height: 38)
                     .background(Color.white.opacity(0.08), in: Circle())
             }
         }
@@ -187,7 +242,6 @@ struct ContentView: View {
                     } label: {
                         HStack(spacing: 5) {
                             Text(section.rawValue)
-
                             if section == .slip && !slip.isEmpty {
                                 Text("\(slip.count)")
                                     .font(.system(size: 10, weight: .black))
@@ -197,7 +251,7 @@ struct ContentView: View {
                             }
                         }
                         .font(.system(size: 13, weight: .bold))
-                        .foregroundStyle(selectedSection == section ? .black : .white.opacity(0.7))
+                        .foregroundStyle(selectedSection == section ? .black : .white.opacity(0.72))
                         .padding(.horizontal, 18)
                         .padding(.vertical, 10)
                         .background(
@@ -233,23 +287,98 @@ struct ContentView: View {
             }
             .padding(.horizontal, 16)
         }
-        .padding(.bottom, 10)
+        .padding(.bottom, 4)
+    }
+
+    private var liveDataPanel: some View {
+        HStack(spacing: 10) {
+            Circle()
+                .fill(livePanelColor)
+                .frame(width: 8, height: 8)
+
+            VStack(alignment: .leading, spacing: 3) {
+                Text(livePanelTitle)
+                    .font(.system(size: 12, weight: .bold))
+                    .foregroundStyle(.white)
+
+                Text(livePanelSubtitle)
+                    .font(.system(size: 10, weight: .medium))
+                    .foregroundStyle(.white.opacity(0.48))
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+
+            Spacer()
+
+            if !liveConfigured && selectedSport != .all {
+                Button("Connect") { showSettings = true }
+                    .font(.system(size: 11, weight: .bold))
+                    .foregroundStyle(Color.green)
+            }
+        }
+        .padding(13)
+        .background(Color.white.opacity(0.05), in: RoundedRectangle(cornerRadius: 15))
+        .padding(.top, 4)
+    }
+
+    private var livePanelColor: Color {
+        if selectedSport == .all { return .orange }
+        if !liveConfigured { return .orange }
+        if liveTeamLoading { return .orange }
+        if liveTeamError != nil { return .red }
+        return .green
+    }
+
+    private var livePanelTitle: String {
+        if selectedSport == .all { return "Select a sport for the full v0.9 model" }
+        if !liveConfigured { return "Live multi-book verification is off" }
+        if liveTeamLoading { return "Refreshing live multi-book market…" }
+        if liveTeamError != nil { return "Live market refresh had an error" }
+        return "\(liveTeamConsensus.count) live consensus outcomes loaded"
+    }
+
+    private var livePanelSubtitle: String {
+        if selectedSport == .all {
+            return "All still shows public boards; sport-specific selection enables ESPN statistical modeling and multi-book validation."
+        }
+        if !liveConfigured {
+            return "Add a free The Odds API key in Settings. Stats modeling still runs without it."
+        }
+        if let error = liveTeamError { return error }
+        if let newest = liveTeamConsensus.map(\.lastUpdated).max() {
+            return "DraftKings • FanDuel • BetMGM • Caesars when available • updated \(newest.formatted(date: .omitted, time: .shortened))"
+        }
+        return "Connected — waiting for current markets."
     }
 
     @ViewBuilder
     private var locksSection: some View {
         statusPanel
 
-        if !loadingSources.isEmpty && lockPicks.isEmpty {
-            loadingCard("Building the decision board…")
+        if !loadingSources.isEmpty && scoredBets.isEmpty {
+            loadingCard("Building statistical + market decision board…")
         } else if lockPicks.isEmpty {
             emptyCard(
                 "PASS — NO VERIFIED LOCKS",
-                "Nothing met v0.8's top-tier requirements. SlipRadar would rather pass than manufacture a lock."
+                "Nothing currently meets the independent-model, live-line and evidence thresholds. SlipRadar will not manufacture a lock."
             )
+
+            if !nearMisses.isEmpty {
+                sectionLabel("CLOSEST QUALIFIERS", "These are not locks. The card explains what is missing.")
+                ForEach(nearMisses.prefix(3)) { item in
+                    betCard(item)
+                }
+            }
         } else {
-            ForEach(lockPicks.prefix(12)) { item in
+            sectionLabel("VERIFIED LOCKS", "Statistics lead; live market data validates.")
+            ForEach(lockPicks.prefix(10)) { item in
                 betCard(item)
+            }
+
+            if !nearMisses.isEmpty {
+                sectionLabel("NEAR MISSES", "Useful research, but below the LOCK threshold.")
+                ForEach(nearMisses.prefix(3)) { item in
+                    betCard(item)
+                }
             }
         }
     }
@@ -259,11 +388,11 @@ struct ContentView: View {
         statusPanel
 
         if !loadingSources.isEmpty && teamPicks.isEmpty {
-            loadingCard("Scoring whole-team markets…")
+            loadingCard("Building whole-team projections…")
         } else if teamPicks.isEmpty {
             emptyCard(
                 "NO QUALIFIED TEAM PICKS",
-                "No current moneyline or spread has enough verified evidence yet."
+                "No current team market has enough statistical edge and live-line quality."
             )
         } else {
             ForEach(teamPicks.prefix(20)) { item in
@@ -277,7 +406,7 @@ struct ContentView: View {
         propStatusPanel
 
         if loadingProps && props.isEmpty {
-            loadingCard("Scoring individual player props…")
+            loadingCard("Loading and modeling player props…")
         } else if scoredProps.isEmpty {
             emptyCard(
                 "NO PROPS FOUND",
@@ -297,7 +426,7 @@ struct ContentView: View {
         if slip.isEmpty {
             emptyCard(
                 "YOUR SLIP IS EMPTY",
-                "Add game, team, or player picks. SlipRadar will estimate combined probability and flag same-event correlation."
+                "Add qualified game, team or player picks. SlipRadar will flag correlation and the weakest leg."
             )
         } else {
             ForEach(slip) { leg in
@@ -306,6 +435,7 @@ struct ContentView: View {
 
             Button {
                 slip.removeAll()
+                SlipStore.save(slip)
             } label: {
                 Text("Clear Slip")
                     .font(.system(size: 13, weight: .bold))
@@ -320,11 +450,12 @@ struct ContentView: View {
     @ViewBuilder
     private var performanceSection: some View {
         performanceSummaryCard
+        performanceBreakdownCard
 
         if trackedPicks.isEmpty {
             emptyCard(
                 "NO TRACKED PICKS YET",
-                "Adding a pick to My Slip starts a local performance record so the model can be audited instead of trusted blindly."
+                "Adding a pick to My Slip records the exact recommendation so the model can be audited over time."
             )
         } else {
             ForEach(trackedPicks.prefix(50)) { pick in
@@ -340,12 +471,12 @@ struct ContentView: View {
                 .frame(width: 8, height: 8)
 
             VStack(alignment: .leading, spacing: 2) {
-                Text(loadingSources.isEmpty ? "\(scoredBets.count) markets scored" : "Scanning sportsbook boards…")
+                Text(loadingSources.isEmpty ? "\(scoredBets.count) markets scored" : "Scanning public boards…")
                     .font(.system(size: 13, weight: .semibold))
                     .foregroundStyle(.white)
 
-                Text("Action Network • DraftKings • line history")
-                    .font(.system(size: 11))
+                Text("\(teamProjections.count) independent team models • public popularity capped as minor evidence")
+                    .font(.system(size: 10))
                     .foregroundStyle(.white.opacity(0.5))
             }
 
@@ -359,7 +490,6 @@ struct ContentView: View {
         }
         .padding(14)
         .background(Color.white.opacity(0.055), in: RoundedRectangle(cornerRadius: 16))
-        .padding(.top, 4)
     }
 
     private var propStatusPanel: some View {
@@ -373,8 +503,8 @@ struct ContentView: View {
                     .font(.system(size: 13, weight: .semibold))
                     .foregroundStyle(.white)
 
-                Text(contextLoaded ? "Odds + public injury context loaded" : "Odds loaded • context limited")
-                    .font(.system(size: 11))
+                Text("\(propProjections.count) recent-game projections • \(propVerifications.count) live-line checks • injuries \(contextLoaded ? "loaded" : "limited")")
+                    .font(.system(size: 10))
                     .foregroundStyle(.white.opacity(0.5))
             }
 
@@ -382,6 +512,20 @@ struct ContentView: View {
         }
         .padding(14)
         .background(Color.white.opacity(0.055), in: RoundedRectangle(cornerRadius: 16))
+    }
+
+    private func sectionLabel(_ title: String, _ subtitle: String) -> some View {
+        HStack {
+            VStack(alignment: .leading, spacing: 2) {
+                Text(title)
+                    .font(.system(size: 11, weight: .black))
+                    .foregroundStyle(.white.opacity(0.8))
+                Text(subtitle)
+                    .font(.system(size: 9, weight: .medium))
+                    .foregroundStyle(.white.opacity(0.4))
+            }
+            Spacer()
+        }
         .padding(.top, 4)
     }
 
@@ -419,40 +563,47 @@ struct ContentView: View {
     private func betCard(_ item: ScoredBet) -> some View {
         let bet = item.bet
         let report = item.report
+        let live = LiveOddsService.matchConsensus(for: bet, in: liveTeamConsensus)
 
         return VStack(alignment: .leading, spacing: 10) {
             HStack {
                 verdictBadge(report.verdict)
 
                 Text(bet.side)
-                    .font(.system(size: 18, weight: .black, design: .rounded))
+                    .font(.system(size: 17, weight: .black, design: .rounded))
                     .foregroundStyle(.white)
                     .lineLimit(2)
 
                 Spacer()
-                probabilityBlock(report)
+
+                liveStatusBadge(report.liveStatus)
             }
 
             Text(bet.matchup)
                 .font(.system(size: 12, weight: .medium))
                 .foregroundStyle(.white.opacity(0.62))
 
-            HStack(spacing: 7) {
+            probabilityGrid(report)
+
+            HStack(spacing: 6) {
                 Text(bet.source == .draftKings ? "DraftKings split feed" : bet.source.rawValue)
                 Text("•")
                 Text(bet.market)
-                Text("•")
-                Text("Evidence \(report.evidenceScore)/100")
+                if let live {
+                    Text("•")
+                    Text("\(live.bookCount) live books")
+                }
             }
-            .font(.system(size: 10, weight: .bold))
-            .foregroundStyle(.white.opacity(0.45))
+            .font(.system(size: 9, weight: .bold))
+            .foregroundStyle(.white.opacity(0.43))
 
             evidenceBox(report)
 
             if report.verdict != .pass {
                 addButton(
                     title: "Add to My Slip",
-                    isAdded: slip.contains(where: { $0.id == betSlipID(bet) })
+                    isAdded: slip.contains(where: { $0.id == betSlipID(bet) }),
+                    disabled: slipIsAtLimit && !slip.contains(where: { $0.id == betSlipID(bet) })
                 ) {
                     toggleBet(bet, report: report)
                 }
@@ -465,18 +616,22 @@ struct ContentView: View {
     private func propCard(_ item: ScoredProp) -> some View {
         let prop = item.prop
         let report = item.report
+        let loadingProjection = propProjectionLoading.contains(prop.id)
+        let loadingVerification = propVerificationLoading.contains(prop.id)
+        let verification = propVerifications[prop.id]
 
         return VStack(alignment: .leading, spacing: 10) {
             HStack {
                 verdictBadge(report.verdict)
 
                 Text(prop.market)
-                    .font(.system(size: 15, weight: .black))
+                    .font(.system(size: 14, weight: .black))
                     .foregroundStyle(.white)
                     .lineLimit(2)
 
                 Spacer()
-                probabilityBlock(report)
+
+                liveStatusBadge(report.liveStatus)
             }
 
             Text(prop.line)
@@ -487,22 +642,34 @@ struct ContentView: View {
                 .font(.system(size: 12, weight: .medium))
                 .foregroundStyle(.white.opacity(0.62))
 
-            HStack(spacing: 7) {
-                Text(prop.source)
-                Text("•")
-                Text(prop.eventDate)
-                Text("•")
-                Text("Evidence \(report.evidenceScore)/100")
+            probabilityGrid(report)
+
+            if loadingProjection {
+                inlineLoading("Building recent-game statistical model…")
+            } else if propProjections[prop.id] == nil {
+                Text("STAT MODEL UNAVAILABLE — this prop cannot become a LOCK.")
+                    .font(.system(size: 9, weight: .black))
+                    .foregroundStyle(.orange)
             }
-            .font(.system(size: 10, weight: .bold))
-            .foregroundStyle(.white.opacity(0.45))
+
+            if loadingVerification {
+                inlineLoading("Checking the exact prop across live books…")
+            } else if let verification {
+                Text(verification.note)
+                    .font(.system(size: 10, weight: .semibold))
+                    .foregroundStyle(verification.status == .live ? Color.green.opacity(0.9) : Color.orange)
+                    .fixedSize(horizontal: false, vertical: true)
+            } else {
+                verifyPropButton(prop)
+            }
 
             evidenceBox(report)
 
             if report.verdict != .pass {
                 addButton(
                     title: "Add Prop to My Slip",
-                    isAdded: slip.contains(where: { $0.id == prop.id })
+                    isAdded: slip.contains(where: { $0.id == prop.id }),
+                    disabled: slipIsAtLimit && !slip.contains(where: { $0.id == prop.id })
                 ) {
                     toggleProp(prop, report: report)
                 }
@@ -510,6 +677,35 @@ struct ContentView: View {
         }
         .padding(16)
         .background(Color.white.opacity(0.055), in: RoundedRectangle(cornerRadius: 18))
+    }
+
+    private func verifyPropButton(_ prop: PropPick) -> some View {
+        Button {
+            if liveConfigured {
+                verifyProp(prop)
+            } else {
+                showSettings = true
+            }
+        } label: {
+            HStack {
+                Image(systemName: liveConfigured ? "checkmark.shield" : "link")
+                Text(liveConfigured ? "Verify exact line across books" : "Connect live multi-book data")
+            }
+            .font(.system(size: 11, weight: .bold))
+            .foregroundStyle(Color.green)
+            .frame(maxWidth: .infinity)
+            .padding(.vertical, 9)
+            .background(Color.green.opacity(0.08), in: RoundedRectangle(cornerRadius: 10))
+        }
+    }
+
+    private func inlineLoading(_ text: String) -> some View {
+        HStack(spacing: 7) {
+            ProgressView().tint(.green).scaleEffect(0.8)
+            Text(text)
+                .font(.system(size: 10, weight: .semibold))
+                .foregroundStyle(.white.opacity(0.55))
+        }
     }
 
     private func verdictBadge(_ verdict: PickVerdict) -> some View {
@@ -530,32 +726,54 @@ struct ContentView: View {
         }
     }
 
-    @ViewBuilder
-    private func probabilityBlock(_ report: DecisionReport) -> some View {
-        VStack(alignment: .trailing, spacing: 1) {
-            if let fair = report.fairProbability {
-                Text(String(format: "%.1f%%", fair))
-                    .font(.system(size: 20, weight: .black))
-                    .foregroundStyle(Color.green)
-                Text("FAIR %")
-                    .font(.system(size: 7, weight: .bold))
-                    .foregroundStyle(.white.opacity(0.4))
-            } else if let market = report.marketProbability {
-                Text(String(format: "%.1f%%", market))
-                    .font(.system(size: 20, weight: .black))
-                    .foregroundStyle(Color.green)
-                Text("IMPLIED %")
-                    .font(.system(size: 7, weight: .bold))
-                    .foregroundStyle(.white.opacity(0.4))
-            } else {
-                Text("—")
-                    .font(.system(size: 20, weight: .black))
-                    .foregroundStyle(.white.opacity(0.4))
-                Text("NO PRICE")
+    private func liveStatusBadge(_ status: LiveLineStatus) -> some View {
+        Text(status.rawValue)
+            .font(.system(size: 7, weight: .black))
+            .foregroundStyle(status == .live ? Color.green : status == .mismatch ? Color.red : Color.orange)
+            .padding(.horizontal, 6)
+            .padding(.vertical, 4)
+            .background(Color.white.opacity(0.055), in: Capsule())
+    }
+
+    private func probabilityGrid(_ report: DecisionReport) -> some View {
+        HStack(spacing: 8) {
+            probabilityCell("MODEL", report.modelProbability)
+            probabilityCell("FAIR", report.fairProbability)
+
+            VStack(alignment: .leading, spacing: 2) {
+                Text(report.estimatedEdge.map { String(format: "%+.1f", $0) } ?? "—")
+                    .font(.system(size: 16, weight: .black))
+                    .foregroundStyle((report.estimatedEdge ?? 0) > 0 ? Color.green : .white)
+                Text("EDGE")
                     .font(.system(size: 7, weight: .bold))
                     .foregroundStyle(.white.opacity(0.4))
             }
+            .frame(maxWidth: .infinity, alignment: .leading)
+
+            VStack(alignment: .leading, spacing: 2) {
+                Text("\(report.evidenceScore)")
+                    .font(.system(size: 16, weight: .black))
+                    .foregroundStyle(.white)
+                Text("EVIDENCE")
+                    .font(.system(size: 7, weight: .bold))
+                    .foregroundStyle(.white.opacity(0.4))
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
         }
+        .padding(10)
+        .background(Color.black.opacity(0.18), in: RoundedRectangle(cornerRadius: 11))
+    }
+
+    private func probabilityCell(_ label: String, _ value: Double?) -> some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Text(value.map { String(format: "%.1f%%", $0) } ?? "—")
+                .font(.system(size: 16, weight: .black))
+                .foregroundStyle(label == "MODEL" && value != nil ? Color.green : .white)
+            Text(label)
+                .font(.system(size: 7, weight: .bold))
+                .foregroundStyle(.white.opacity(0.4))
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     private func evidenceBox(_ report: DecisionReport) -> some View {
@@ -572,17 +790,23 @@ struct ContentView: View {
                     .foregroundStyle(.white.opacity(0.55))
             }
 
-            ForEach(Array(report.reasons.prefix(4).enumerated()), id: \.offset) { _, reason in
-                Text("• \(reason)")
+            if report.reasons.isEmpty {
+                Text("• Not enough independent evidence to support this selection.")
                     .font(.system(size: 11, weight: .medium))
-                    .foregroundStyle(.white.opacity(0.76))
-                    .fixedSize(horizontal: false, vertical: true)
+                    .foregroundStyle(.white.opacity(0.72))
+            } else {
+                ForEach(Array(report.reasons.prefix(5).enumerated()), id: \.offset) { _, reason in
+                    Text("• \(reason)")
+                        .font(.system(size: 11, weight: .medium))
+                        .foregroundStyle(.white.opacity(0.76))
+                        .fixedSize(horizontal: false, vertical: true)
+                }
             }
 
             if !report.risks.isEmpty {
                 Divider().overlay(Color.white.opacity(0.08))
 
-                Text("WATCH OUT")
+                Text("WHY IT COULD FAIL")
                     .font(.system(size: 8, weight: .black))
                     .foregroundStyle(.orange)
 
@@ -603,51 +827,73 @@ struct ContentView: View {
         let combined = probabilities.isEmpty ? nil : probabilities.reduce(1.0) { partial, value in
             partial * (value / 100.0)
         } * 100.0
-        let correlated = hasCorrelatedLegs
+        let weakest = slip.min(by: { $0.evidenceScore < $1.evidenceScore })
 
         return VStack(alignment: .leading, spacing: 8) {
             HStack {
                 Text("MY SLIP")
                     .font(.system(size: 18, weight: .black))
                     .foregroundStyle(.white)
-
                 Spacer()
-
-                Text("\(slip.count) LEGS")
+                Text("\(slip.count)/\(maxSlipLegs) LEGS")
                     .font(.system(size: 10, weight: .black))
-                    .foregroundStyle(Color.green)
+                    .foregroundStyle(slipIsAtLimit ? Color.orange : Color.green)
             }
 
             if let combined {
                 Text(String(format: "Naive independent chance: %.2f%%", combined))
                     .font(.system(size: 14, weight: .bold))
                     .foregroundStyle(.white)
-
-                if probabilities.count != slip.count {
-                    Text("Some legs have no probability estimate, so the combined number is incomplete.")
-                        .font(.system(size: 10, weight: .semibold))
-                        .foregroundStyle(.orange)
-                }
             } else {
                 Text("No probability estimate is available yet.")
                     .font(.system(size: 12, weight: .medium))
                     .foregroundStyle(.white.opacity(0.6))
             }
 
-            if correlated {
-                Text("⚠️ Correlation warning: multiple legs are from the same event. Do not treat the multiplied probability as reliable.")
+            if let weakest {
+                Text("Weakest evidence leg: \(weakest.title) — \(weakest.evidenceScore)/100")
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(.orange)
+            }
+
+            if hasCorrelatedLegs {
+                Text("⚠️ Same-event correlation detected. The multiplied probability above should not be treated as a true combined probability.")
                     .font(.system(size: 11, weight: .semibold))
                     .foregroundStyle(.orange)
                     .fixedSize(horizontal: false, vertical: true)
             } else if slip.count >= 2 {
-                Text("No obvious same-event correlation detected. Independence is still an approximation.")
+                Text("No obvious same-event correlation detected. Independence is still only an approximation.")
                     .font(.system(size: 10, weight: .medium))
                     .foregroundStyle(.white.opacity(0.5))
             }
+
+            Text("Risk guard: max \(maxSlipLegs) legs • daily reminder \(dailyRiskUnitsString) units.")
+                .font(.system(size: 10, weight: .bold))
+                .foregroundStyle(.white.opacity(0.42))
         }
         .padding(16)
         .background(Color.white.opacity(0.055), in: RoundedRectangle(cornerRadius: 16))
         .padding(.top, 4)
+    }
+
+    private var maxSlipLegs: Int {
+        let stored = UserDefaults.standard.integer(forKey: "SlipRadar.maxSlipLegs.v09")
+        return stored == 0 ? 4 : stored
+    }
+
+    private var dailyRiskUnits: Double {
+        let stored = UserDefaults.standard.double(forKey: "SlipRadar.dailyRiskUnits.v09")
+        return stored == 0 ? 3 : stored
+    }
+
+    private var dailyRiskUnitsString: String {
+        dailyRiskUnits.rounded() == dailyRiskUnits
+            ? String(Int(dailyRiskUnits))
+            : String(format: "%.1f", dailyRiskUnits)
+    }
+
+    private var slipIsAtLimit: Bool {
+        slip.count >= maxSlipLegs
     }
 
     private var hasCorrelatedLegs: Bool {
@@ -682,10 +928,9 @@ struct ContentView: View {
                     Text(leg.source)
                     Text("•")
                     Text("Evidence \(leg.evidenceScore)/100")
-
                     if let probability = leg.probability {
                         Text("•")
-                        Text(String(format: "%.1f%%", probability))
+                        Text(String(format: "%.1f%% model", probability))
                     }
                 }
                 .font(.system(size: 10, weight: .bold))
@@ -696,6 +941,7 @@ struct ContentView: View {
 
             Button {
                 slip.removeAll { $0.id == leg.id }
+                SlipStore.save(slip)
             } label: {
                 Image(systemName: "xmark")
                     .font(.system(size: 12, weight: .bold))
@@ -719,17 +965,15 @@ struct ContentView: View {
             HStack(spacing: 18) {
                 metric("TRACKED", "\(summary.totalTracked)")
                 metric("SETTLED", "\(summary.settled)")
-
                 if let winRate = summary.winRate {
                     metric("WIN RATE", String(format: "%.1f%%", winRate))
                 }
-
                 if let roi = summary.flatStakeROI {
                     metric("1U ROI", String(format: "%+.1f%%", roi))
                 }
             }
 
-            Text("Results are graded locally. This is forward performance tracking, not proof of future edge.")
+            Text("Calibration activates only after enough settled picks exist in a probability range. Small samples do not rewrite the model.")
                 .font(.system(size: 10, weight: .medium))
                 .foregroundStyle(.white.opacity(0.45))
         }
@@ -738,12 +982,45 @@ struct ContentView: View {
         .padding(.top, 4)
     }
 
+    private var performanceBreakdownCard: some View {
+        let rows = PerformanceStore.breakdownByVerdict().filter { $0.count > 0 }
+
+        return VStack(alignment: .leading, spacing: 8) {
+            Text("BY VERDICT")
+                .font(.system(size: 10, weight: .black))
+                .foregroundStyle(.white.opacity(0.5))
+
+            if rows.isEmpty {
+                Text("No settled results yet.")
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundStyle(.white.opacity(0.5))
+            } else {
+                ForEach(Array(rows.enumerated()), id: \.offset) { _, row in
+                    HStack {
+                        Text(row.label)
+                            .font(.system(size: 11, weight: .black))
+                            .foregroundStyle(.white)
+                        Spacer()
+                        Text("\(row.wins)-\(row.losses)")
+                            .font(.system(size: 11, weight: .bold))
+                            .foregroundStyle(.white.opacity(0.65))
+                        Text(row.winRate.map { String(format: "%.1f%%", $0) } ?? "—")
+                            .font(.system(size: 11, weight: .black))
+                            .foregroundStyle(Color.green)
+                            .frame(width: 52, alignment: .trailing)
+                    }
+                }
+            }
+        }
+        .padding(14)
+        .background(Color.white.opacity(0.045), in: RoundedRectangle(cornerRadius: 14))
+    }
+
     private func metric(_ label: String, _ value: String) -> some View {
         VStack(alignment: .leading, spacing: 2) {
             Text(value)
                 .font(.system(size: 14, weight: .black))
                 .foregroundStyle(.white)
-
             Text(label)
                 .font(.system(size: 8, weight: .bold))
                 .foregroundStyle(.white.opacity(0.38))
@@ -760,6 +1037,7 @@ struct ContentView: View {
                 Text(pick.title)
                     .font(.system(size: 15, weight: .black))
                     .foregroundStyle(.white)
+                    .lineLimit(2)
 
                 Spacer()
 
@@ -775,13 +1053,14 @@ struct ContentView: View {
             HStack(spacing: 8) {
                 Text("Evidence \(pick.evidenceScore)/100")
                 if let probability = pick.estimatedProbability {
-                    Text(String(format: "• %.1f%% est.", probability))
+                    Text(String(format: "• %.1f%% model", probability))
                 }
                 if let odds = pick.odds {
                     Text("• \(odds)")
                 }
+                Text("• \(pick.addedAt.formatted(date: .abbreviated, time: .shortened))")
             }
-            .font(.system(size: 10, weight: .bold))
+            .font(.system(size: 9, weight: .bold))
             .foregroundStyle(.white.opacity(0.42))
 
             if pick.outcome == .pending {
@@ -819,21 +1098,30 @@ struct ContentView: View {
         }
     }
 
-    private func addButton(title: String, isAdded: Bool, action: @escaping () -> Void) -> some View {
+    private func addButton(
+        title: String,
+        isAdded: Bool,
+        disabled: Bool,
+        action: @escaping () -> Void
+    ) -> some View {
         Button(action: action) {
-            Text(isAdded ? "Added ✓" : title)
+            Text(isAdded ? "Added ✓" : disabled ? "Risk guard: slip is full" : title)
                 .font(.system(size: 12, weight: .bold))
-                .foregroundStyle(isAdded ? .black : .white)
+                .foregroundStyle(isAdded ? .black : disabled ? .orange : .white)
                 .frame(maxWidth: .infinity)
                 .padding(.vertical, 10)
-                .background(isAdded ? Color.green : Color.white.opacity(0.08), in: RoundedRectangle(cornerRadius: 12))
+                .background(
+                    isAdded ? Color.green : Color.white.opacity(0.08),
+                    in: RoundedRectangle(cornerRadius: 12)
+                )
         }
+        .disabled(disabled)
     }
 
     private var footer: some View {
         VStack(spacing: 5) {
-            Text("FAIR % removes listed market vig when enough opposing prices are available. IMPLIED % does not.")
-            Text("Evidence scores are decision-support signals, not guaranteed win probabilities. Verify the current line before wagering.")
+            Text("MODEL % is built from independent recent performance when verified data is available. FAIR % is the de-vigged market estimate when live opposing prices are available.")
+            Text("No wager is guaranteed. A missing model, stale/mismatched line, or serious availability warning blocks a LOCK.")
         }
         .font(.system(size: 10))
         .multilineTextAlignment(.center)
@@ -850,8 +1138,11 @@ struct ContentView: View {
 
         if slip.contains(where: { $0.id == id }) {
             slip.removeAll { $0.id == id }
+            SlipStore.save(slip)
             return
         }
+
+        guard !slipIsAtLimit else { return }
 
         let leg = SlipLeg(
             id: id,
@@ -861,12 +1152,14 @@ struct ContentView: View {
             signal: report.verdict.rawValue,
             event: bet.matchup,
             market: bet.market,
-            odds: bet.odds,
-            probability: report.fairProbability ?? report.marketProbability,
-            evidenceScore: report.evidenceScore
+            odds: LiveOddsService.matchConsensus(for: bet, in: liveTeamConsensus)?.bestOdds ?? bet.odds,
+            probability: report.modelProbability ?? report.fairProbability,
+            evidenceScore: report.evidenceScore,
+            addedAt: Date()
         )
 
         slip.append(leg)
+        SlipStore.save(slip)
         PerformanceStore.track(leg)
         performanceToken = UUID()
     }
@@ -874,8 +1167,11 @@ struct ContentView: View {
     private func toggleProp(_ prop: PropPick, report: DecisionReport) {
         if slip.contains(where: { $0.id == prop.id }) {
             slip.removeAll { $0.id == prop.id }
+            SlipStore.save(slip)
             return
         }
+
+        guard !slipIsAtLimit else { return }
 
         let leg = SlipLeg(
             id: prop.id,
@@ -885,12 +1181,14 @@ struct ContentView: View {
             signal: report.verdict.rawValue,
             event: prop.event,
             market: prop.market,
-            odds: prop.odds,
-            probability: report.marketProbability,
-            evidenceScore: report.evidenceScore
+            odds: propVerifications[prop.id]?.bestOdds ?? prop.odds,
+            probability: report.modelProbability ?? report.fairProbability,
+            evidenceScore: report.evidenceScore,
+            addedAt: Date()
         )
 
         slip.append(leg)
+        SlipStore.save(slip)
         PerformanceStore.track(leg)
         performanceToken = UUID()
     }
@@ -902,7 +1200,94 @@ struct ContentView: View {
         loadingProps = true
         contextText = ""
         contextLoaded = selectedSport.contextURL == nil
+
+        teamProjections = [:]
+        propProjections = [:]
+        propProjectionLoading = []
+        propVerifications = [:]
+        propVerificationLoading = []
+
+        liveTeamConsensus = []
+        liveTeamError = nil
+
+        apiKey = SecretStore.loadOddsAPIKey()
         refreshToken = UUID()
+        refreshLiveLayers()
+    }
+
+    private func refreshLiveLayers() {
+        guard liveConfigured else {
+            liveTeamLoading = false
+            liveTeamConsensus = []
+            return
+        }
+
+        liveTeamLoading = true
+        liveTeamError = nil
+
+        let sport = selectedSport
+        let key = apiKey
+
+        Task {
+            do {
+                let result = try await LiveOddsService.fetchTeamConsensus(sport: sport, apiKey: key)
+                await MainActor.run {
+                    if selectedSport == sport {
+                        liveTeamConsensus = result
+                        liveTeamLoading = false
+                    }
+                }
+            } catch {
+                await MainActor.run {
+                    if selectedSport == sport {
+                        liveTeamConsensus = []
+                        liveTeamLoading = false
+                        liveTeamError = error.localizedDescription
+                    }
+                }
+            }
+        }
+    }
+
+    private func verifyProp(_ prop: PropPick) {
+        guard liveConfigured else {
+            showSettings = true
+            return
+        }
+
+        propVerificationLoading.insert(prop.id)
+        let sport = selectedSport
+        let key = apiKey
+
+        Task {
+            do {
+                let result = try await LiveOddsService.verifyProp(prop, sport: sport, apiKey: key)
+                await MainActor.run {
+                    propVerifications[prop.id] = result
+                    propVerificationLoading.remove(prop.id)
+                }
+            } catch {
+                await MainActor.run {
+                    propVerifications[prop.id] = LivePropVerification(
+                        status: .unverified,
+                        event: prop.event,
+                        market: prop.market,
+                        player: prop.playerName,
+                        direction: prop.direction,
+                        requestedPoint: prop.threshold,
+                        livePoint: nil,
+                        fairProbability: nil,
+                        averageImpliedProbability: nil,
+                        bestOdds: nil,
+                        bookCount: 0,
+                        books: [],
+                        checkedAt: Date(),
+                        note: "Live verification failed: \(error.localizedDescription)"
+                    )
+                    propVerificationLoading.remove(prop.id)
+                }
+            }
+        }
     }
 
     private func handleText(_ text: String, source: BetSource) {
@@ -913,6 +1298,7 @@ struct ContentView: View {
             MarketHistoryStore.record(bets: parsed)
             loadingSources.remove(source)
             lastUpdated = Date()
+            scheduleTeamProjectionLoad()
         }
     }
 
@@ -924,6 +1310,40 @@ struct ContentView: View {
         }
     }
 
+    private func scheduleTeamProjectionLoad() {
+        guard selectedSport != .all, selectedSport != .soccer else { return }
+
+        let sport = selectedSport
+        let matchups = Array(Set(board.map(\.matchup)))
+            .filter { teamProjections[MarketKey.normalized($0)] == nil }
+            .prefix(8)
+
+        guard !matchups.isEmpty else { return }
+
+        Task {
+            await withTaskGroup(of: (String, TeamProjection?).self) { group in
+                for matchup in matchups {
+                    group.addTask {
+                        let projection = await StatProjectionService.teamProjection(
+                            for: matchup,
+                            sport: sport
+                        )
+                        return (matchup, projection)
+                    }
+                }
+
+                for await (matchup, projection) in group {
+                    guard let projection else { continue }
+                    await MainActor.run {
+                        if selectedSport == sport {
+                            teamProjections[MarketKey.normalized(matchup)] = projection
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     private func handlePropsText(_ text: String) {
         let parsed = PropTextParser.parse(text)
 
@@ -932,6 +1352,42 @@ struct ContentView: View {
             MarketHistoryStore.record(props: parsed)
             loadingProps = false
             lastUpdated = Date()
+            schedulePropProjectionLoad(parsed)
+        }
+    }
+
+    private func schedulePropProjectionLoad(_ parsed: [PropPick]) {
+        guard selectedSport.supportsPlayerGameLogs else { return }
+
+        let sport = selectedSport
+        let candidates = Array(parsed.prefix(16))
+            .filter { propProjections[$0.id] == nil && !propProjectionLoading.contains($0.id) }
+
+        guard !candidates.isEmpty else { return }
+
+        candidates.forEach { propProjectionLoading.insert($0.id) }
+
+        Task {
+            await withTaskGroup(of: (String, StatProjection?).self) { group in
+                for prop in candidates {
+                    group.addTask {
+                        let projection = await StatProjectionService.playerProjection(
+                            for: prop,
+                            sport: sport
+                        )
+                        return (prop.id, projection)
+                    }
+                }
+
+                for await (id, projection) in group {
+                    await MainActor.run {
+                        propProjectionLoading.remove(id)
+                        if selectedSport == sport, let projection {
+                            propProjections[id] = projection
+                        }
+                    }
+                }
+            }
         }
     }
 
@@ -955,5 +1411,19 @@ struct ContentView: View {
             contextText = ""
             contextLoaded = false
         }
+    }
+
+    private func scoredBetSort(_ lhs: ScoredBet, _ rhs: ScoredBet) -> Bool {
+        if lhs.report.verdict.rank == rhs.report.verdict.rank {
+            return lhs.report.evidenceScore > rhs.report.evidenceScore
+        }
+        return lhs.report.verdict.rank > rhs.report.verdict.rank
+    }
+
+    private func scoredPropSort(_ lhs: ScoredProp, _ rhs: ScoredProp) -> Bool {
+        if lhs.report.verdict.rank == rhs.report.verdict.rank {
+            return lhs.report.evidenceScore > rhs.report.evidenceScore
+        }
+        return lhs.report.verdict.rank > rhs.report.verdict.rank
     }
 }

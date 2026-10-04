@@ -15,17 +15,26 @@ enum OddsMath {
         return value
     }
 
-    static func impliedProbability(from odds: String) -> Double? {
-        guard let value = americanValue(from: odds) else { return nil }
+    static func impliedProbability(fromAmerican value: Double) -> Double {
         if value > 0 { return 100.0 * 100.0 / (value + 100.0) }
         let absolute = abs(value)
         return 100.0 * absolute / (absolute + 100.0)
+    }
+
+    static func impliedProbability(from odds: String) -> Double? {
+        guard let value = americanValue(from: odds) else { return nil }
+        return impliedProbability(fromAmerican: value)
     }
 
     static func decimalOdds(from odds: String) -> Double? {
         guard let value = americanValue(from: odds) else { return nil }
         if value > 0 { return 1.0 + value / 100.0 }
         return 1.0 + 100.0 / abs(value)
+    }
+
+    static func americanString(_ value: Double) -> String {
+        let rounded = Int(value.rounded())
+        return rounded > 0 ? "+\(rounded)" : "\(rounded)"
     }
 }
 
@@ -52,7 +61,7 @@ struct PopularBet: Identifiable, Hashable {
     }
 }
 
-enum SportFilter: String, CaseIterable, Identifiable {
+enum SportFilter: String, CaseIterable, Identifiable, Codable {
     case all = "All"
     case nfl = "NFL"
     case ncaaf = "NCAAF"
@@ -105,6 +114,43 @@ enum SportFilter: String, CaseIterable, Identifiable {
         }
     }
 
+    var oddsAPISportKey: String? {
+        switch self {
+        case .all: return nil
+        case .nfl: return "americanfootball_nfl"
+        case .ncaaf: return "americanfootball_ncaaf"
+        case .nba: return "basketball_nba"
+        case .ncaab: return "basketball_ncaab"
+        case .mlb: return "baseball_mlb"
+        case .nhl: return "icehockey_nhl"
+        case .wnba: return "basketball_wnba"
+        case .soccer: return "soccer_usa_mls"
+        }
+    }
+
+    var espnRoute: (sport: String, league: String, searchSport: String)? {
+        switch self {
+        case .all: return nil
+        case .nfl: return ("football", "nfl", "football")
+        case .ncaaf: return ("football", "college-football", "football")
+        case .nba: return ("basketball", "nba", "basketball")
+        case .ncaab: return ("basketball", "mens-college-basketball", "basketball")
+        case .mlb: return ("baseball", "mlb", "baseball")
+        case .nhl: return ("hockey", "nhl", "hockey")
+        case .wnba: return ("basketball", "wnba", "basketball")
+        case .soccer: return ("soccer", "usa.1", "soccer")
+        }
+    }
+
+    var supportsPlayerGameLogs: Bool {
+        switch self {
+        case .nba, .wnba, .ncaab, .nfl, .ncaaf, .mlb:
+            return true
+        default:
+            return false
+        }
+    }
+
     private var draftKingsGroup: String {
         switch self {
         case .all: return "0"
@@ -123,11 +169,15 @@ enum SportFilter: String, CaseIterable, Identifiable {
 enum SlipRadarError: LocalizedError {
     case noData
     case invalidPage
+    case liveOddsNotConfigured
+    case unsupportedSport
 
     var errorDescription: String? {
         switch self {
         case .noData: return "No public betting rows were found yet."
         case .invalidPage: return "SlipRadar could not read the public betting page."
+        case .liveOddsNotConfigured: return "Live multi-book odds are not connected."
+        case .unsupportedSport: return "This live-data feature is not available for the selected sport."
         }
     }
 }
@@ -163,16 +213,30 @@ struct PropPick: Identifiable, Hashable {
         let candidates = [line, market]
         for candidate in candidates {
             let lower = candidate.lowercased()
-            if let range = lower.range(of: " over ") ?? lower.range(of: " under ") {
-                let prefix = String(candidate[..<range.lowerBound]).trimmingCharacters(in: .whitespacesAndNewlines)
-                if prefix.split(separator: " ").count >= 2 { return prefix }
-            }
-            if let dash = candidate.range(of: " - ") {
-                let prefix = String(candidate[..<dash.lowerBound]).trimmingCharacters(in: .whitespacesAndNewlines)
-                if prefix.split(separator: " ").count >= 2 { return prefix }
+            for separator in [" over ", " under ", " - ", " o", " u"] {
+                if let range = lower.range(of: separator) {
+                    let prefix = String(candidate[..<range.lowerBound]).trimmingCharacters(in: .whitespacesAndNewlines)
+                    if prefix.split(separator: " ").count >= 2 { return prefix }
+                }
             }
         }
         return ""
+    }
+
+    var threshold: Double? {
+        let combined = line + " " + market
+        guard let regex = try? NSRegularExpression(pattern: #"\d+(?:\.\d+)?"#) else { return nil }
+        let ns = combined as NSString
+        let matches = regex.matches(in: combined, range: NSRange(location: 0, length: ns.length))
+        guard let match = matches.last else { return nil }
+        return Double(ns.substring(with: match.range))
+    }
+
+    var direction: String? {
+        let lower = (line + " " + market).lowercased()
+        if lower.contains("under") || lower.range(of: #"(^|\s)u\s*\d"#, options: .regularExpression) != nil { return "Under" }
+        if lower.contains("over") || lower.range(of: #"(^|\s)o\s*\d"#, options: .regularExpression) != nil { return "Over" }
+        return nil
     }
 }
 
@@ -192,12 +256,93 @@ enum PickVerdict: String, Codable, CaseIterable {
     }
 }
 
+enum LiveLineStatus: String, Codable {
+    case live = "LIVE"
+    case stale = "STALE"
+    case mismatch = "MISMATCH"
+    case unverified = "UNVERIFIED"
+    case notConnected = "NOT CONNECTED"
+}
+
+struct LiveMarketConsensus: Identifiable, Hashable {
+    let id: String
+    let event: String
+    let market: String
+    let outcome: String
+    let point: Double?
+    let fairProbability: Double
+    let averageImpliedProbability: Double
+    let bestOdds: String
+    let bookCount: Int
+    let books: [String]
+    let lastUpdated: Date
+}
+
+struct LivePropVerification: Hashable {
+    let status: LiveLineStatus
+    let event: String
+    let market: String
+    let player: String
+    let direction: String?
+    let requestedPoint: Double?
+    let livePoint: Double?
+    let fairProbability: Double?
+    let averageImpliedProbability: Double?
+    let bestOdds: String?
+    let bookCount: Int
+    let books: [String]
+    let checkedAt: Date
+    let note: String
+}
+
+struct StatProjection: Hashable {
+    let playerName: String
+    let metricName: String
+    let threshold: Double
+    let direction: String
+    let sampleSize: Int
+    let recentSampleSize: Int
+    let seasonAverage: Double
+    let recentAverage: Double
+    let seasonHitRate: Double
+    let recentHitRate: Double
+    let rawModelProbability: Double
+    let modelProbability: Double
+    let calibratedSampleSize: Int
+    let generatedAt: Date
+
+    var edgeToLine: Double {
+        direction == "Under" ? threshold - recentAverage : recentAverage - threshold
+    }
+}
+
+struct TeamProjection: Hashable {
+    let matchup: String
+    let awayTeam: String
+    let homeTeam: String
+    let awayAverageFor: Double
+    let awayAverageAgainst: Double
+    let homeAverageFor: Double
+    let homeAverageAgainst: Double
+    let projectedAwayScore: Double
+    let projectedHomeScore: Double
+    let projectedTotal: Double
+    let projectedHomeMargin: Double
+    let marginStdDev: Double
+    let totalStdDev: Double
+    let sampleSize: Int
+    let generatedAt: Date
+}
+
 struct DecisionReport {
+    let modelProbability: Double?
     let fairProbability: Double?
     let marketProbability: Double?
+    let estimatedEdge: Double?
     let evidenceScore: Int
     let dataQuality: Int
     let sourceCount: Int
+    let liveStatus: LiveLineStatus
     let verdict: PickVerdict
     let reasons: [String]
     let risks: [String]
@@ -226,4 +371,5 @@ struct SlipLeg: Identifiable, Hashable, Codable {
     let odds: String?
     let probability: Double?
     let evidenceScore: Int
+    let addedAt: Date
 }
