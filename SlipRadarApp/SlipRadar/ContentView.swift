@@ -202,7 +202,7 @@ struct ContentView: View {
             VStack(alignment: .trailing, spacing: 7) {
                 Text("\(bet.lockScore)")
                     .font(.system(size: 23, weight: .black, design: .rounded))
-                    .foregroundStyle(bet.score >= 70 ? Color.green : .white)
+                    .foregroundStyle(bet.lockScore >= 70 ? Color.green : .white)
                 Text("LOCK SCORE")
                     .font(.system(size: 9, weight: .bold))
                     .foregroundStyle(.white.opacity(0.35))
