@@ -40,6 +40,8 @@ struct ContentView: View {
                         switch selectedSection {
                         case .locks:
                             locksSection
+                        case .teams:
+                            teamsSection
                         case .props:
                             propsSection
                         case .slip:
@@ -97,7 +99,7 @@ struct ContentView: View {
                     .font(.system(size: 27, weight: .black, design: .rounded))
                     .foregroundStyle(.white)
 
-                Text("LOCKS • PROPS • BUILD")
+                Text("LOCKS • TEAMS • PROPS • BUILD")
                     .font(.system(size: 11, weight: .bold, design: .rounded))
                     .tracking(1.4)
                     .foregroundStyle(Color.green)
@@ -183,6 +185,28 @@ struct ContentView: View {
             emptyCard("NO QUALIFYING LOCKS", "Nothing on the connected public boards passed the lock filter.")
         } else {
             ForEach(Array(locks.prefix(12).enumerated()), id: \.element.id) { index, bet in
+                lockCard(rank: index + 1, bet: bet)
+            }
+        }
+    }
+
+    private var teamLocks: [PopularBet] {
+        locks.filter { bet in
+            let market = bet.market.lowercased()
+            return market.contains("moneyline") || market.contains("spread")
+        }
+    }
+
+    @ViewBuilder
+    private var teamsSection: some View {
+        statusPanel
+
+        if !loadingSources.isEmpty && teamLocks.isEmpty {
+            loadingCard("Scanning whole-team markets…")
+        } else if teamLocks.isEmpty {
+            emptyCard("NO TEAM LOCKS", "No current moneyline or spread selections passed the lock filter.")
+        } else {
+            ForEach(Array(teamLocks.prefix(20).enumerated()), id: \.element.id) { index, bet in
                 lockCard(rank: index + 1, bet: bet)
             }
         }
@@ -361,7 +385,7 @@ struct ContentView: View {
                 .font(.system(size: 12, weight: .medium))
                 .foregroundStyle(.white.opacity(0.62))
 
-            Text("\(bet.source.rawValue) • \(bet.market)")
+            Text(bet.source == .draftKings ? "DraftKings split feed • \(bet.market)" : "\(bet.source.rawValue) • \(bet.market)")
                 .font(.system(size: 10, weight: .bold))
                 .foregroundStyle(.white.opacity(0.45))
 
@@ -482,8 +506,8 @@ struct ContentView: View {
 
     private var footer: some View {
         VStack(spacing: 5) {
-            Text("IMPLIED % comes directly from sportsbook odds. SIGNAL % is SlipRadar's public-data confidence score.")
-            Text("Neither is a guaranteed result. Props without verified split percentages are labeled POPULAR, not LOCK.")
+            Text("IMPLIED % comes from the listed source odds. SIGNAL % is SlipRadar's public-data confidence score.")
+            Text("DraftKings split-feed lines can differ by jurisdiction and are not treated as locally verified sportsbook lines.")
         }
         .font(.system(size: 10))
         .multilineTextAlignment(.center)
