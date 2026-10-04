@@ -95,6 +95,28 @@ enum SportFilter: String, CaseIterable, Identifiable {
         ]
         return components.url!
     }
+
+    var draftKingsPropsURL: URL {
+        let base = "https://dknetwork.draftkings.com/draftkings-sportsbook-player-props/"
+        let group: String
+        switch self {
+        case .nfl: group = "NFL"
+        case .ncaaf: group = "NCAA Football"
+        case .nba: group = "NBA"
+        case .ncaab: group = "NCAA Basketball"
+        case .mlb: group = "MLB"
+        case .nhl: group = "NHL"
+        case .wnba: group = "WNBA"
+        case .soccer: group = "Soccer"
+        case .all: group = "0"
+        }
+        var components = URLComponents(string: base)!
+        components.queryItems = [
+            URLQueryItem(name: "tb_edate", value: "n7days"),
+            URLQueryItem(name: "tb_eg", value: group)
+        ]
+        return components.url!
+    }
 }
 
 enum SlipRadarError: LocalizedError {
