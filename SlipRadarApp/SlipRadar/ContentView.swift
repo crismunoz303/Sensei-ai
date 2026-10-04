@@ -2,11 +2,22 @@ import SwiftUI
 
 struct ContentView: View {
     @State private var selectedSport: SportFilter = .all
-    @State private var bets: [PopularBet] = []
-    @State private var loading = true
-    @State private var errorMessage: String?
+    @State private var resultsBySource: [BetSource: [PopularBet]] = [:]
+    @State private var loadingSources: Set<BetSource> = Set(BetSource.allCases)
     @State private var refreshToken = UUID()
     @State private var lastUpdated: Date?
+
+    private var locks: [PopularBet] {
+        resultsBySource.values
+            .flatMap { $0 }
+            .filter { $0.isLock }
+            .sorted { lhs, rhs in
+                if lhs.lockScore == rhs.lockScore {
+                    return lhs.moneyPercent ?? 0 > rhs.moneyPercent ?? 0
+                }
+                return lhs.lockScore > rhs.lockScore
+            }
+    }
 
     var body: some View {
         ZStack {
@@ -20,12 +31,12 @@ struct ContentView: View {
                     LazyVStack(spacing: 12) {
                         statusPanel
 
-                        if loading && bets.isEmpty {
+                        if !loadingSources.isEmpty && locks.isEmpty {
                             loadingCard
-                        } else if bets.isEmpty {
+                        } else if locks.isEmpty {
                             emptyCard
                         } else {
-                            ForEach(Array(bets.prefix(5).enumerated()), id: \.element.id) { index, bet in
+                            ForEach(Array(locks.prefix(12).enumerated()), id: \.element.id) { index, bet in
                                 betCard(rank: index + 1, bet: bet)
                             }
                         }
@@ -38,17 +49,30 @@ struct ContentView: View {
                 .refreshable { refresh() }
             }
 
-            WebTextLoader(
-                url: selectedSport.sourceURL,
-                refreshToken: refreshToken,
-                onText: handleText,
-                onError: handleError
-            )
-            .frame(width: 1, height: 1)
-            .opacity(0.01)
-            .allowsHitTesting(false)
+            ForEach(BetSource.allCases) { source in
+                WebTextLoader(
+                    url: sourceURL(source),
+                    refreshToken: refreshToken,
+                    onText: { text in handleText(text, source: source) },
+                    onError: { _ in handleError(source: source) }
+                )
+                .frame(width: 1, height: 1)
+                .opacity(0.01)
+                .allowsHitTesting(false)
+            }
         }
-        .onChange(of: selectedSport) { _, _ in refresh() }
+        .onChange(of: selectedSport) { _, _ in
+            refresh()
+        }
+    }
+
+    private func sourceURL(_ source: BetSource) -> URL {
+        switch source {
+        case .action:
+            return selectedSport.actionURL
+        case .draftKings:
+            return selectedSport.draftKingsURL
+        }
     }
 
     private var header: some View {
@@ -57,12 +81,15 @@ struct ContentView: View {
                 Text("SLIPRADAR")
                     .font(.system(size: 27, weight: .black, design: .rounded))
                     .foregroundStyle(.white)
-                Text("TODAY'S LOCKS ONLY")
+
+                Text("MULTI-BOOK LOCKS")
                     .font(.system(size: 11, weight: .bold, design: .rounded))
                     .tracking(1.6)
                     .foregroundStyle(Color.green)
             }
+
             Spacer()
+
             Button(action: refresh) {
                 Image(systemName: "arrow.clockwise")
                     .font(.system(size: 16, weight: .bold))
@@ -103,32 +130,47 @@ struct ContentView: View {
     private var statusPanel: some View {
         HStack(spacing: 10) {
             Circle()
-                .fill(loading ? Color.orange : Color.green)
+                .fill(loadingSources.isEmpty ? Color.green : Color.orange)
                 .frame(width: 8, height: 8)
+
             VStack(alignment: .leading, spacing: 2) {
-                Text(loading ? "Scanning today’s board…" : "\(bets.count) locks qualified")
+                Text(loadingSources.isEmpty ? "\(locks.count) locks across sources" : "Scanning sportsbook boards…")
                     .font(.system(size: 13, weight: .semibold))
                     .foregroundStyle(.white)
-                if let lastUpdated {
-                    Text("Updated \(lastUpdated.formatted(date: .omitted, time: .shortened))")
-                        .font(.system(size: 11))
-                        .foregroundStyle(.white.opacity(0.45))
-                }
+
+                Text(sourceStatusText)
+                    .font(.system(size: 11))
+                    .foregroundStyle(.white.opacity(0.5))
             }
+
             Spacer()
-            Text("ACTION NETWORK")
-                .font(.system(size: 9, weight: .bold))
-                .foregroundStyle(.white.opacity(0.45))
+
+            if let lastUpdated {
+                Text(lastUpdated.formatted(date: .omitted, time: .shortened))
+                    .font(.system(size: 10, weight: .bold))
+                    .foregroundStyle(.white.opacity(0.4))
+            }
         }
         .padding(14)
         .background(Color.white.opacity(0.055), in: RoundedRectangle(cornerRadius: 16))
         .padding(.top, 4)
     }
 
+    private var sourceStatusText: String {
+        let loaded = BetSource.allCases.filter { resultsBySource[$0] != nil }
+        if loaded.isEmpty {
+            return "Action Network + DraftKings"
+        }
+        return loaded.map { $0.rawValue }.joined(separator: " • ")
+    }
+
     private var loadingCard: some View {
         VStack(spacing: 12) {
-            ProgressView().tint(.green).scaleEffect(1.2)
-            Text("Testing today's board against the lock filter…")
+            ProgressView()
+                .tint(.green)
+                .scaleEffect(1.2)
+
+            Text("Checking public money and bet splits…")
                 .font(.system(size: 14, weight: .semibold))
                 .foregroundStyle(.white.opacity(0.7))
         }
@@ -139,14 +181,20 @@ struct ContentView: View {
 
     private var emptyCard: some View {
         VStack(spacing: 12) {
-            Image(systemName: "antenna.radiowaves.left.and.right.slash")
+            Image(systemName: "shield.slash")
                 .font(.system(size: 28))
                 .foregroundStyle(.orange)
-            Text(errorMessage ?? "NO LOCKS TODAY")
-                .font(.system(size: 14, weight: .semibold))
+
+            Text("NO QUALIFYING LOCKS")
+                .font(.system(size: 17, weight: .black))
+                .foregroundStyle(.white)
+
+            Text("The connected public sportsbook boards did not produce a play strong enough for the lock filter.")
+                .font(.system(size: 13, weight: .medium))
                 .multilineTextAlignment(.center)
-                .foregroundStyle(.white.opacity(0.75))
-            Button("Try Again", action: refresh)
+                .foregroundStyle(.white.opacity(0.62))
+
+            Button("Scan Again", action: refresh)
                 .font(.system(size: 14, weight: .bold))
                 .foregroundStyle(.black)
                 .padding(.horizontal, 18)
@@ -159,7 +207,7 @@ struct ContentView: View {
     }
 
     private func betCard(rank: Int, bet: PopularBet) -> some View {
-        HStack(spacing: 14) {
+        HStack(spacing: 12) {
             rankView(rank)
             betDetails(bet)
             Spacer()
@@ -169,46 +217,61 @@ struct ContentView: View {
         .background(Color.white.opacity(0.055), in: RoundedRectangle(cornerRadius: 18))
         .overlay(
             RoundedRectangle(cornerRadius: 18)
-                .stroke(rank <= 3 ? Color.green.opacity(0.22) : Color.white.opacity(0.04), lineWidth: 1)
+                .stroke(rank <= 3 ? Color.green.opacity(0.28) : Color.white.opacity(0.04), lineWidth: 1)
         )
     }
 
     private func rankView(_ rank: Int) -> some View {
         Text("#\(rank)")
-            .font(.system(size: 15, weight: .black, design: .rounded))
+            .font(.system(size: 14, weight: .black, design: .rounded))
             .foregroundStyle(rank <= 3 ? Color.green : Color.white.opacity(0.4))
-            .frame(width: 34)
+            .frame(width: 32)
     }
 
     private func betDetails(_ bet: PopularBet) -> some View {
-        VStack(alignment: .leading, spacing: 7) {
-            HStack {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 6) {
                 Text(bet.side)
-                    .font(.system(size: 20, weight: .black, design: .rounded))
+                    .font(.system(size: 17, weight: .black, design: .rounded))
                     .foregroundStyle(.white)
+                    .lineLimit(2)
 
                 Text("LOCK")
-                    .font(.system(size: 9, weight: .black))
+                    .font(.system(size: 8, weight: .black))
                     .foregroundStyle(Color.green)
-                    .padding(.horizontal, 7)
-                    .padding(.vertical, 4)
+                    .padding(.horizontal, 6)
+                    .padding(.vertical, 3)
                     .background(Color.green.opacity(0.12), in: Capsule())
             }
 
             Text(bet.matchup)
-                .font(.system(size: 13, weight: .medium))
-                .foregroundStyle(.white.opacity(0.67))
+                .font(.system(size: 12, weight: .medium))
+                .foregroundStyle(.white.opacity(0.62))
+                .lineLimit(2)
+
+            HStack(spacing: 6) {
+                Text(bet.source.rawValue.uppercased())
+                    .font(.system(size: 8, weight: .black))
+                    .foregroundStyle(.black)
+                    .padding(.horizontal, 6)
+                    .padding(.vertical, 3)
+                    .background(Color.green, in: Capsule())
+
+                Text(bet.market.uppercased())
+                    .font(.system(size: 8, weight: .bold))
+                    .foregroundStyle(.white.opacity(0.55))
+            }
 
             Text(bet.lockReason)
                 .font(.system(size: 11, weight: .semibold))
-                .foregroundStyle(Color.green.opacity(0.85))
+                .foregroundStyle(Color.green.opacity(0.88))
 
             statsRow(bet)
         }
     }
 
     private func statsRow(_ bet: PopularBet) -> some View {
-        HStack(spacing: 14) {
+        HStack(spacing: 12) {
             stat("BETS", "\(bet.betsPercent)%")
 
             if let money = bet.moneyPercent {
@@ -223,25 +286,26 @@ struct ContentView: View {
     }
 
     private func scoreView(_ bet: PopularBet) -> some View {
-        VStack(alignment: .trailing, spacing: 7) {
+        VStack(alignment: .trailing, spacing: 6) {
             Text("\(bet.lockScore)")
-                .font(.system(size: 23, weight: .black, design: .rounded))
-                .foregroundStyle(bet.lockScore >= 70 ? Color.green : Color.white)
+                .font(.system(size: 22, weight: .black, design: .rounded))
+                .foregroundStyle(Color.green)
 
-            Text("LOCK SCORE")
-                .font(.system(size: 9, weight: .bold))
+            Text("SCORE")
+                .font(.system(size: 8, weight: .bold))
                 .foregroundStyle(.white.opacity(0.35))
 
             Text(bet.startTime)
-                .font(.system(size: 10, weight: .semibold))
-                .foregroundStyle(.white.opacity(0.55))
+                .font(.system(size: 9, weight: .semibold))
+                .foregroundStyle(.white.opacity(0.5))
+                .multilineTextAlignment(.trailing)
         }
     }
 
     private func stat(_ label: String, _ value: String) -> some View {
         VStack(alignment: .leading, spacing: 2) {
             Text(value)
-                .font(.system(size: 13, weight: .bold))
+                .font(.system(size: 12, weight: .bold))
                 .foregroundStyle(.white)
             Text(label)
                 .font(.system(size: 8, weight: .bold))
@@ -251,8 +315,8 @@ struct ContentView: View {
 
     private var footer: some View {
         VStack(spacing: 5) {
-            Text("LOCK = SlipRadar's strictest qualifying signal, not a guaranteed winner.")
-            Text("Source: Action Network public betting splits. Data availability varies. 21+ where applicable.")
+            Text("LOCK means SlipRadar's strongest public-data signal — never a guaranteed winner.")
+            Text("Public sources currently connected: Action Network and DraftKings. Internal sportsbook data is only used when publicly exposed.")
         }
         .font(.system(size: 10))
         .multilineTextAlignment(.center)
@@ -261,29 +325,26 @@ struct ContentView: View {
     }
 
     private func refresh() {
-        loading = true
-        errorMessage = nil
+        resultsBySource = [:]
+        loadingSources = Set(BetSource.allCases)
         refreshToken = UUID()
     }
 
-    private func handleText(_ text: String) {
-        let parsed = BetTextParser.parse(text)
-        let locks = parsed
-            .filter { $0.isLock }
-            .sorted { $0.lockScore > $1.lockScore }
+    private func handleText(_ text: String, source: BetSource) {
+        let parsed = BetTextParser.parse(text, source: source)
 
         DispatchQueue.main.async {
-            self.bets = Array(locks.prefix(5))
-            self.loading = false
-            self.lastUpdated = Date()
-            self.errorMessage = locks.isEmpty ? "NO LOCKS TODAY\nNothing passed the strict filter." : nil
+            resultsBySource[source] = parsed
+            loadingSources.remove(source)
+            lastUpdated = Date()
         }
     }
 
-    private func handleError(_ error: Error) {
+    private func handleError(source: BetSource) {
         DispatchQueue.main.async {
-            self.loading = false
-            self.errorMessage = error.localizedDescription
+            resultsBySource[source] = []
+            loadingSources.remove(source)
+            lastUpdated = Date()
         }
     }
 }
