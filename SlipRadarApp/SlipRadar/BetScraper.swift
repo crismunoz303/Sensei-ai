@@ -70,6 +70,8 @@ enum BetTextParser {
             return parseAction(text)
         case .draftKings:
             return parseDraftKings(text)
+        case .multiBook:
+            return []
         }
     }
 

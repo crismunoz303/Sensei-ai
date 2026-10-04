@@ -59,7 +59,7 @@ enum StatProjectionService {
 
             guard games.count >= 3 else { return nil }
             let values = games.map(\.value)
-            let recentValues = Array(values.prefix(min(10, values.count)))
+            let recentValues = Array(values.prefix(min(recentWindow(for: sport), values.count)))
 
             let seasonAverage = mean(values)
             let recentAverage = mean(recentValues)
@@ -76,9 +76,10 @@ enum StatProjectionService {
                 distributionProbability = seasonHitRate
             }
 
-            let recentWeight = recentValues.count >= 8 ? 0.40 : 0.30
-            let seasonWeight = 0.25
-            let distributionWeight = 1.0 - recentWeight - seasonWeight
+            let weights = playerWeights(for: sport, metric: metric.displayName)
+            let recentWeight = weights.recent
+            let seasonWeight = weights.season
+            let distributionWeight = max(0, 1.0 - recentWeight - seasonWeight)
             let raw = recentHitRate * recentWeight +
                 seasonHitRate * seasonWeight +
                 distributionProbability * distributionWeight
@@ -117,8 +118,8 @@ enum StatProjectionService {
         }
 
         do {
-            async let awayID = findTeamID(name: teams.away, searchSport: route.searchSport)
-            async let homeID = findTeamID(name: teams.home, searchSport: route.searchSport)
+            async let awayID = findTeamID(name: teams.away, route: route)
+            async let homeID = findTeamID(name: teams.home, route: route)
 
             guard let away = try await awayID,
                   let home = try await homeID else {
@@ -163,6 +164,8 @@ enum StatProjectionService {
                 marginStdDev: max(stddev(marginSamples), defaultMarginStdDev(for: sport)),
                 totalStdDev: max(stddev(totalSamples), defaultTotalStdDev(for: sport)),
                 sampleSize: min(awayRecent.count, homeRecent.count),
+                awayRestDays: restDays(since: awayRecent.first?.date),
+                homeRestDays: restDays(since: homeRecent.first?.date),
                 generatedAt: Date()
             )
         } catch {
@@ -207,6 +210,49 @@ enum StatProjectionService {
         }
 
         return nil
+    }
+
+    static func latestPlayerStat(
+        playerName: String,
+        market: String,
+        line: String,
+        sport: SportFilter,
+        after date: Date
+    ) async -> (date: Date, value: Double)? {
+        let prop = PropPick(
+            event: "",
+            eventDate: "",
+            market: market,
+            line: line,
+            odds: "—",
+            source: "Result check",
+            isLock: false,
+            handlePercent: nil,
+            betPercent: nil,
+            sport: sport
+        )
+
+        guard let route = sport.espnRoute,
+              let metric = metricDefinition(for: prop, sport: sport) else { return nil }
+
+        do {
+            guard let athleteID = try await findAthleteID(name: playerName, searchSport: route.searchSport) else { return nil }
+            let url = URL(string:
+                "https://site.web.api.espn.com/apis/common/v3/sports/\(route.sport)/\(route.league)/athletes/\(athleteID)/gamelog"
+            )!
+            let data = try await fetch(url)
+            guard let root = try JSONSerialization.jsonObject(with: data) as? [String: Any] else { return nil }
+
+            return extractStatGames(root: root, metric: metric)
+                .compactMap { game -> (Date, Double)? in
+                    guard let gameDate = game.date, gameDate >= date.addingTimeInterval(-6 * 3600) else { return nil }
+                    return (gameDate, game.value)
+                }
+                .sorted { $0.0 > $1.0 }
+                .first
+        } catch {
+            return nil
+        }
     }
 
     private struct MetricDefinition {
@@ -287,7 +333,21 @@ enum StatProjectionService {
                 return MetricDefinition(displayName: "Runs", aliases: [["runs", "r"]])
             }
 
-        default:
+        case .nhl:
+            if text.contains("shot") {
+                return MetricDefinition(displayName: "Shots on goal", aliases: [["shotsOnGoal", "shots", "sog"]])
+            }
+            if text.contains("goal") {
+                return MetricDefinition(displayName: "Goals", aliases: [["goals", "g"]])
+            }
+            if text.contains("assist") {
+                return MetricDefinition(displayName: "Assists", aliases: [["assists", "a"]])
+            }
+            if text.contains("point") {
+                return MetricDefinition(displayName: "Points", aliases: [["points", "pts"]])
+            }
+
+        case .soccer, .all:
             return nil
         }
 
@@ -396,8 +456,52 @@ enum StatProjectionService {
         try await searchID(name: name, searchSport: searchSport, kind: "athlete")
     }
 
-    private static func findTeamID(name: String, searchSport: String) async throws -> String? {
-        try await searchID(name: name, searchSport: searchSport, kind: "team")
+    private static func findTeamID(
+        name: String,
+        route: (sport: String, league: String, searchSport: String)
+    ) async throws -> String? {
+        var components = URLComponents(
+            string: "https://site.api.espn.com/apis/site/v2/sports/\(route.sport)/\(route.league)/teams"
+        )!
+        components.queryItems = [URLQueryItem(name: "limit", value: "1000")]
+
+        let data = try await fetch(components.url!)
+        let object = try JSONSerialization.jsonObject(with: data)
+
+        let target = MarketKey.normalized(name)
+        var candidates: [(String, Double)] = []
+
+        func walk(_ value: Any) {
+            if let dictionary = value as? [String: Any] {
+                if let id = stringValue(dictionary["id"]) {
+                    let names = [
+                        stringValue(dictionary["displayName"]),
+                        stringValue(dictionary["shortDisplayName"]),
+                        stringValue(dictionary["name"]),
+                        stringValue(dictionary["abbreviation"]),
+                        stringValue(dictionary["location"]),
+                        stringValue(dictionary["nickname"])
+                    ].compactMap { $0 }
+
+                    let best = names
+                        .map { nameSimilarity(target, MarketKey.normalized($0)) }
+                        .max() ?? 0
+
+                    if best >= 0.45 {
+                        candidates.append((id, best))
+                    }
+                }
+                for child in dictionary.values { walk(child) }
+            } else if let array = value as? [Any] {
+                for child in array { walk(child) }
+            }
+        }
+
+        walk(object)
+        if let best = candidates.max(by: { $0.1 < $1.1 }) { return best.0 }
+
+        // Search remains a fallback for unusual aliases / college naming.
+        return try await searchID(name: name, searchSport: route.searchSport, kind: "team")
     }
 
     private static func searchID(name: String, searchSport: String, kind: String) async throws -> String? {
@@ -636,6 +740,39 @@ enum StatProjectionService {
         case (_?, nil): return true
         default: return false
         }
+    }
+
+    private static func recentWindow(for sport: SportFilter) -> Int {
+        switch sport {
+        case .nfl, .ncaaf: return 8
+        case .nba, .wnba, .ncaab: return 10
+        case .mlb: return 15
+        case .nhl: return 12
+        case .soccer, .all: return 10
+        }
+    }
+
+    private static func playerWeights(
+        for sport: SportFilter,
+        metric: String
+    ) -> (recent: Double, season: Double) {
+        switch sport {
+        case .nfl, .ncaaf:
+            return (0.35, 0.30)
+        case .nba, .wnba, .ncaab:
+            return (0.42, 0.23)
+        case .mlb:
+            return metric.lowercased().contains("strikeout") ? (0.34, 0.31) : (0.38, 0.27)
+        case .nhl:
+            return (0.38, 0.27)
+        case .soccer, .all:
+            return (0.35, 0.30)
+        }
+    }
+
+    private static func restDays(since date: Date?) -> Int? {
+        guard let date else { return nil }
+        return max(0, Calendar.current.dateComponents([.day], from: date, to: Date()).day ?? 0)
     }
 
     private static func defaultMarginStdDev(for sport: SportFilter) -> Double {

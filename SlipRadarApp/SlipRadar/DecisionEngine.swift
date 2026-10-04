@@ -18,12 +18,7 @@ enum MarketKey {
 
     static func eventTokens(_ text: String) -> Set<String> {
         let ignored = Set(["vs", "at", "the"])
-        return Set(
-            normalized(text)
-                .split(separator: " ")
-                .map(String.init)
-                .filter { !ignored.contains($0) }
-        )
+        return Set(normalized(text).split(separator: " ").map(String.init).filter { !ignored.contains($0) })
     }
 
     static func sameEvent(_ lhs: String, _ rhs: String) -> Bool {
@@ -31,8 +26,7 @@ enum MarketKey {
         let b = eventTokens(rhs)
         if a == b { return true }
         guard !a.isEmpty, !b.isEmpty else { return false }
-        let overlap = Double(a.intersection(b).count)
-        return overlap / Double(min(a.count, b.count)) >= 0.6
+        return Double(a.intersection(b).count) / Double(min(a.count, b.count)) >= 0.6
     }
 
     static func sameSelection(_ lhs: String, _ rhs: String) -> Bool {
@@ -40,12 +34,12 @@ enum MarketKey {
         let b = Set(selectionBase(rhs).split(separator: " ").map(String.init))
         if a == b { return true }
         guard !a.isEmpty, !b.isEmpty else { return false }
-        let overlap = Double(a.intersection(b).count)
-        return overlap / Double(min(a.count, b.count)) >= 0.6
+        return Double(a.intersection(b).count) / Double(min(a.count, b.count)) >= 0.7
     }
 
     static func betHistoryKey(_ bet: PopularBet) -> String {
         [
+            bet.sport?.rawValue ?? "",
             normalized(bet.matchup),
             normalized(bet.market),
             selectionBase(bet.side)
@@ -54,6 +48,7 @@ enum MarketKey {
 
     static func propHistoryKey(_ prop: PropPick) -> String {
         [
+            prop.sport?.rawValue ?? "",
             normalized(prop.event),
             normalized(prop.market),
             selectionBase(prop.line)
@@ -74,8 +69,8 @@ enum ContextAnalyzer {
         let end = min(lowerText.length, match.location + match.length + 280)
         let window = lowerText.substring(with: NSRange(location: start, length: end - start))
 
-        let severe = [" out ", "inactive", "injured reserve", " il ", " ir ", "suspended"]
-        let caution = ["questionable", "doubtful", "day-to-day", "game-time decision", "minutes restriction"]
+        let severe = [" out ", "inactive", "injured reserve", " il ", " ir ", "suspended", "ruled out"]
+        let caution = ["questionable", "doubtful", "day-to-day", "game-time decision", "minutes restriction", "limited"]
 
         if severe.contains(where: { window.contains($0) }) {
             return ["Public injury context shows a severe availability warning near \(name)."]
@@ -93,9 +88,19 @@ enum DecisionEngine {
         board: [PopularBet],
         liveConsensus: LiveMarketConsensus?,
         teamProjection: TeamProjection?,
+        eventContext: EventContextSnapshot?,
         liveConfigured: Bool
     ) -> DecisionReport {
-        let model = StatProjectionService.teamModelProbability(for: bet, projection: teamProjection)
+        var model = StatProjectionService.teamModelProbability(for: bet, projection: teamProjection)
+        let weather = EventContextService.weatherAdjustment(
+            for: bet,
+            sport: bet.sport ?? .all,
+            context: eventContext
+        )
+        if let current = model, weather.points != 0 {
+            model = clamp(current + weather.points, 2, 98)
+        }
+
         let fallbackFair = fairProbability(for: bet, board: board)
         let fair = liveConsensus?.fairProbability ?? fallbackFair
         let market = liveConsensus?.averageImpliedProbability ?? bet.impliedProbability
@@ -103,147 +108,183 @@ enum DecisionEngine {
             if !liveConfigured { return .notConnected }
             return LiveOddsService.lineStatus(for: bet, consensus: liveConsensus)
         }()
-
-        let sourceCount = sourceCount(for: bet, board: board)
+        let sources = sourceCount(for: bet, board: board)
         let movement = MarketHistoryStore.movement(for: bet)
 
-        var score = 0
-        var quality = 0
+        var evidence = 0
         var reasons: [String] = []
         var risks: [String] = []
 
+        var statsQuality = 0
+        var marketQuality = 0
+        var availabilityQuality = 0
+        var freshnessQuality = 0
+        var historyQuality = 0
+        var publicQuality = 0
+
         if let model, let projection = teamProjection {
-            let sample = projection.sampleSize
-            score += 42
-            quality += min(35, 20 + sample)
+            statsQuality = min(40, 24 + projection.sampleSize)
+            evidence += 38
+            evidence += max(-6, min(12, Int((model - 50) / 2)))
             reasons.append(String(
-                format: "Independent recent-performance model: %.1f%% from %d-game team samples.",
+                format: "Independent team model: %.1f%% from recent scoring/defense distributions (%d-game samples).",
                 model,
-                sample
+                projection.sampleSize
             ))
             reasons.append(String(
-                format: "Projected score: %@ %.1f, %@ %.1f.",
-                projection.awayTeam,
+                format: "Projected score %.1f–%.1f; projected total %.1f.",
                 projection.projectedAwayScore,
-                projection.homeTeam,
-                projection.projectedHomeScore
+                projection.projectedHomeScore,
+                projection.projectedTotal
             ))
+            if let awayRest = projection.awayRestDays, let homeRest = projection.homeRestDays {
+                reasons.append("Rest context: \(projection.awayTeam) \(awayRest)d • \(projection.homeTeam) \(homeRest)d since last recorded game.")
+            }
         } else {
-            risks.append("No reliable independent team-stat projection was available for this exact market.")
+            risks.append("Independent team-stat projection is unavailable; this line cannot become a LOCK.")
         }
 
         if let live = liveConsensus {
-            quality += min(30, 12 + live.bookCount * 5)
-            score += min(18, 8 + live.bookCount * 2)
+            marketQuality = min(25, 10 + live.bookCount * 4)
+            evidence += 12 + min(8, live.bookCount * 2)
             reasons.append(String(
-                format: "Live de-vig consensus: %.1f%% across %d book%@ (%@).",
+                format: "Live no-vig consensus %.1f%% across %d book%@.",
                 live.fairProbability,
                 live.bookCount,
-                live.bookCount == 1 ? "" : "s",
-                live.books.joined(separator: ", ")
+                live.bookCount == 1 ? "" : "s"
             ))
-            reasons.append("Best observed price: \(live.bestOdds).")
+            reasons.append("Best observed price \(live.bestOdds) at \(live.bestBook).")
         } else if let fallbackFair {
-            quality += 10
-            score += 5
-            reasons.append(String(format: "Fallback de-vig estimate from the available listed market: %.1f%%.", fallbackFair))
-            risks.append("Multi-book live consensus was not available for this selection.")
+            marketQuality = 8
+            evidence += 4
+            reasons.append(String(format: "Fallback single-feed de-vig estimate %.1f%%.", fallbackFair))
+            risks.append("Multi-book consensus is unavailable for this exact line.")
         } else if let market {
-            quality += 6
-            reasons.append(String(format: "Listed price implies %.1f%% before removing sportsbook margin.", market))
-            risks.append("No complete two-sided live market was available for de-vigging.")
+            marketQuality = 4
+            reasons.append(String(format: "Listed price implies %.1f%% before removing vig.", market))
+            risks.append("No reliable no-vig market probability is available.")
         }
 
         var edge: Double?
         if let model, let fair {
-            let value = model - fair
-            edge = value
-
-            if value >= 6 {
-                score += 18
-                reasons.append(String(format: "Model edge over market fair probability: +%.1f points.", value))
-            } else if value >= 3 {
-                score += 12
-                reasons.append(String(format: "Model edge over market fair probability: +%.1f points.", value))
-            } else if value >= 1 {
-                score += 5
-                reasons.append(String(format: "Small model edge: +%.1f points.", value))
-            } else if value < 0 {
-                score -= 15
-                risks.append(String(format: "Independent model is %.1f points below the market.", abs(value)))
+            edge = model - fair
+            if let edge {
+                if edge >= 7 {
+                    evidence += 20
+                    reasons.append(String(format: "Model edge: +%.1f percentage points vs market.", edge))
+                } else if edge >= 4 {
+                    evidence += 14
+                    reasons.append(String(format: "Model edge: +%.1f points.", edge))
+                } else if edge >= 2 {
+                    evidence += 7
+                    reasons.append(String(format: "Modest model edge: +%.1f points.", edge))
+                } else if edge < 0 {
+                    evidence -= 14
+                    risks.append(String(format: "Independent model is %.1f points below the market.", abs(edge)))
+                }
             }
         }
 
         switch lineStatus {
         case .live:
-            score += 10
-            quality += 15
-            reasons.append("The exact market/line is confirmed on the live multi-book board.")
+            freshnessQuality = 10
+            evidence += 10
+            reasons.append("The exact line is current and live-verified.")
         case .mismatch:
-            score -= 40
-            risks.append("Current live line does not match the line being scored.")
+            evidence -= 45
+            risks.append("The scored line no longer matches the live market.")
         case .stale:
-            score -= 30
-            risks.append("The live market is stale.")
+            freshnessQuality = 1
+            evidence -= 35
+            risks.append("The connected line is stale.")
         case .unverified:
-            score -= 8
-            risks.append("The current line could not be verified across the connected books.")
+            freshnessQuality = 3
+            evidence -= 8
+            risks.append("The exact line could not be live-verified.")
         case .notConnected:
-            score -= 8
+            freshnessQuality = 1
+            evidence -= 6
             risks.append("Live multi-book verification is not connected.")
         }
 
-        if let money = bet.moneyPercent {
-            let publicEdge = money - bet.betsPercent
-            if publicEdge >= 8 {
-                score += 5
-                reasons.append("\(money)% money vs \(bet.betsPercent)% bets gives a secondary +\(publicEdge)-point confirmation.")
-            } else if publicEdge >= 3 {
-                score += 2
-                reasons.append("Public money/ticket split gives mild confirmation.")
-            } else if publicEdge < -5 {
-                score -= 2
-                risks.append("Public money trails ticket share.")
+        if let context = eventContext {
+            availabilityQuality = 12
+            if let venue = context.venue {
+                reasons.append("Venue: \(venue).")
             }
-        }
-
-        if sourceCount >= 2 {
-            score += 4
-            quality += 5
-            reasons.append("\(sourceCount) public split sources point to the same selection.")
+            if let weatherText = context.weather, (bet.sport ?? .all).isOutdoorWeatherRelevant {
+                reasons.append("Weather context: \(weatherText).")
+            }
+            if let note = weather.note {
+                evidence += Int(weather.points.rounded())
+                reasons.append(note)
+            }
+        } else {
+            availabilityQuality = 6
         }
 
         if let movement {
-            let adjustment = max(-4, min(5, movement.supportPoints))
-            score += adjustment
-            quality += 4
+            historyQuality = 5
+            evidence += max(-5, min(5, movement.supportPoints))
             reasons.append(movement.summary)
+        } else {
+            historyQuality = 1
+            risks.append("No meaningful recorded line-movement history yet.")
         }
 
-        risks.append("Public betting popularity is intentionally a minor input, not the prediction engine.")
-        risks.append("Recent-team modeling is a statistical estimate; roster changes and matchup effects can still invalidate it.")
+        if bet.source != .multiBook, let money = bet.moneyPercent {
+            publicQuality = 4
+            let splitEdge = money - bet.betsPercent
+            if splitEdge >= 10 {
+                evidence += 4
+                reasons.append("\(money)% money vs \(bet.betsPercent)% bets adds minor confirmation.")
+            } else if splitEdge <= -8 {
+                evidence -= 3
+                risks.append("Public money trails ticket share by \(abs(splitEdge)) points.")
+            }
+        } else {
+            publicQuality = 1
+        }
 
-        score = min(100, max(0, score))
-        quality = min(100, max(0, quality))
+        if sources >= 2 {
+            evidence += 3
+            reasons.append("\(sources) public signal feeds agree on the selection.")
+        }
+
+        risks.append("Public betting popularity is supporting evidence only; it does not create the prediction.")
+        evidence = clampInt(evidence)
+
+        let components = ConfidenceBreakdown(
+            stats: statsQuality,
+            market: marketQuality,
+            availability: availabilityQuality,
+            freshness: freshnessQuality,
+            history: historyQuality,
+            publicSignal: publicQuality
+        )
+        let quality = min(100, components.total)
+        let bestOdds = liveConsensus?.bestOdds ?? bet.odds
+        let ev = OddsMath.expectedValuePercent(probability: model, odds: bestOdds)
 
         let verdict: PickVerdict
         if lineStatus == .mismatch || lineStatus == .stale {
             verdict = .pass
         } else if let model, let edge,
+                  model >= 58,
+                  edge >= 4,
+                  evidence >= 76,
+                  quality >= 70,
                   lineStatus == .live,
-                  (liveConsensus?.bookCount ?? 0) >= 2,
-                  model >= 57,
-                  edge >= 3,
-                  score >= 78,
-                  quality >= 68 {
+                  (liveConsensus?.bookCount ?? 0) >= 2 {
             verdict = .lock
         } else if let model, let edge,
-                  model >= 54,
-                  edge >= 1.5,
-                  score >= 62,
+                  model >= 55,
+                  edge >= 2,
+                  evidence >= 58,
+                  quality >= 52,
                   lineStatus == .live {
             verdict = .strong
-        } else if model != nil && score >= 48 {
+        } else if model != nil && evidence >= 42 {
             verdict = .consider
         } else {
             verdict = .pass
@@ -254,11 +295,13 @@ enum DecisionEngine {
             fairProbability: fair,
             marketProbability: market,
             estimatedEdge: edge,
-            evidenceScore: score,
+            expectedValuePercent: ev,
+            evidenceScore: evidence,
             dataQuality: quality,
-            sourceCount: sourceCount,
+            sourceCount: max(sources, liveConsensus?.bookCount ?? 0),
             liveStatus: lineStatus,
             verdict: verdict,
+            components: components,
             reasons: reasons,
             risks: risks
         )
@@ -269,168 +312,213 @@ enum DecisionEngine {
         projection: StatProjection?,
         verification: LivePropVerification?,
         contextText: String,
+        availability: PlayerAvailabilitySnapshot?,
         liveConfigured: Bool
     ) -> DecisionReport {
         let model = projection?.modelProbability
-        let fair = verification?.status == .live
-            ? verification?.fairProbability
-            : prop.impliedProbability
+        let fair = verification?.status == .live ? verification?.fairProbability : prop.impliedProbability
         let market = verification?.averageImpliedProbability ?? prop.impliedProbability
         let lineStatus: LiveLineStatus = {
             if !liveConfigured { return .notConnected }
             return verification?.status ?? .unverified
         }()
-
         let movement = MarketHistoryStore.movement(for: prop)
-        let contextFlags = ContextAnalyzer.flags(for: prop.playerName, in: contextText)
+        let injuryFlags = ContextAnalyzer.flags(for: prop.playerName, in: contextText)
 
-        var score = 0
-        var quality = 0
+        var evidence = 0
         var reasons: [String] = []
         var risks: [String] = []
+        var statsQuality = 0
+        var marketQuality = 0
+        var availabilityQuality = 0
+        var freshnessQuality = 0
+        var historyQuality = 0
+        var publicQuality = 0
 
         if let projection {
-            let sample = projection.sampleSize
-            score += 48
-            quality += min(40, 22 + sample)
+            statsQuality = min(40, 22 + projection.sampleSize)
+            evidence += 42
+            evidence += max(-6, min(12, Int((projection.modelProbability - 50) / 2)))
             reasons.append(String(
-                format: "Independent %@ model: %.1f%% (%d games).",
+                format: "%@ model: %.1f%% (%d games).",
                 projection.metricName,
                 projection.modelProbability,
-                sample
+                projection.sampleSize
             ))
             reasons.append(String(
-                format: "Recent average %.2f vs %.2f line; last-%d hit rate %.0f%%.",
+                format: "Recent avg %.2f vs %.2f line; recent hit rate %.0f%% (%d games).",
                 projection.recentAverage,
                 projection.threshold,
-                projection.recentSampleSize,
-                projection.recentHitRate
+                projection.recentHitRate,
+                projection.recentSampleSize
             ))
             reasons.append(String(
-                format: "Season sample average %.2f; season hit rate %.0f%%.",
+                format: "Longer-sample avg %.2f; longer-sample hit rate %.0f%%.",
                 projection.seasonAverage,
                 projection.seasonHitRate
             ))
-
-            if projection.calibratedSampleSize >= 10 {
-                reasons.append("Probability was calibration-adjusted using \(projection.calibratedSampleSize) previously settled tracked picks.")
+            if projection.calibratedSampleSize >= 20 {
+                reasons.append("Probability is calibration-adjusted from \(projection.calibratedSampleSize) comparable settled picks.")
+            } else {
+                risks.append("Calibration history is still small, so the probability remains conservatively shrunk.")
             }
         } else {
-            risks.append("No verified recent-game statistical projection is available for this prop.")
+            risks.append("No verified player game-log projection is available; this prop cannot become a LOCK.")
         }
 
-        if let verification {
-            if verification.status == .live,
-               let liveFair = verification.fairProbability {
-                score += min(18, 8 + verification.bookCount * 2)
-                quality += min(30, 10 + verification.bookCount * 5)
-                reasons.append(String(
-                    format: "Exact live line confirmed by %d book%@; de-vig fair probability %.1f%%.",
-                    verification.bookCount,
-                    verification.bookCount == 1 ? "" : "s",
-                    liveFair
-                ))
-                if let best = verification.bestOdds {
-                    reasons.append("Best observed live price: \(best).")
-                }
-            } else {
-                risks.append(verification.note)
+        if let verification, verification.status == .live, let liveFair = verification.fairProbability {
+            marketQuality = min(25, 10 + verification.bookCount * 4)
+            evidence += 12 + min(8, verification.bookCount * 2)
+            reasons.append(String(
+                format: "Exact prop confirmed by %d book%@; no-vig fair probability %.1f%%.",
+                verification.bookCount,
+                verification.bookCount == 1 ? "" : "s",
+                liveFair
+            ))
+            if let odds = verification.bestOdds {
+                reasons.append("Best observed price \(odds)\(verification.bestBook.map { " at \($0)" } ?? "").")
             }
-        } else if liveConfigured {
-            risks.append("Live prop verification has not been run for this prop yet.")
+        } else if let verification {
+            marketQuality = 4
+            risks.append(verification.note)
         } else {
-            risks.append("Live multi-book prop verification is not connected.")
+            marketQuality = liveConfigured ? 2 : 0
+            risks.append(liveConfigured ? "Deep Check has not live-verified this exact prop yet." : "Live multi-book prop verification is not connected.")
         }
 
         var edge: Double?
         if let model, let fair {
-            let value = model - fair
-            edge = value
-
-            if value >= 7 {
-                score += 18
-                reasons.append(String(format: "Independent model edge: +%.1f percentage points.", value))
-            } else if value >= 4 {
-                score += 14
-                reasons.append(String(format: "Independent model edge: +%.1f percentage points.", value))
-            } else if value >= 2 {
-                score += 7
-                reasons.append(String(format: "Modest model edge: +%.1f points.", value))
-            } else if value < 0 {
-                score -= 16
-                risks.append(String(format: "Model probability is %.1f points below the market.", abs(value)))
+            edge = model - fair
+            if let edge {
+                if edge >= 7 {
+                    evidence += 20
+                    reasons.append(String(format: "Independent model edge: +%.1f percentage points.", edge))
+                } else if edge >= 4 {
+                    evidence += 14
+                    reasons.append(String(format: "Model edge: +%.1f points.", edge))
+                } else if edge >= 2 {
+                    evidence += 7
+                    reasons.append(String(format: "Modest model edge: +%.1f points.", edge))
+                } else if edge < 0 {
+                    evidence -= 15
+                    risks.append(String(format: "Model is %.1f points below market consensus.", abs(edge)))
+                }
             }
         }
 
-        if !contextText.isEmpty {
-            quality += 8
-            if prop.playerName.isEmpty {
-                risks.append("Player name could not be parsed reliably for injury matching.")
-            } else if contextFlags.isEmpty {
-                reasons.append("No injury warning was detected for \(prop.playerName) on the loaded public injury page.")
-            } else {
-                score -= 35
-                risks.append(contentsOf: contextFlags)
+        var severeAvailability = false
+        var cautionAvailability = false
+
+        if let availability {
+            switch availability.severity {
+            case .clear:
+                availabilityQuality = availability.starterConfirmed == true ? 15 : 12
+                reasons.append(availability.note)
+            case .caution:
+                availabilityQuality = 6
+                cautionAvailability = true
+                evidence -= 18
+                risks.append(availability.note)
+            case .severe:
+                availabilityQuality = 0
+                severeAvailability = true
+                evidence -= 50
+                risks.append(availability.note)
+            case .unknown:
+                availabilityQuality = 4
+                risks.append(availability.note)
             }
+        } else if !contextText.isEmpty && injuryFlags.isEmpty {
+            availabilityQuality = 7
+            reasons.append("No injury warning was detected on the loaded public injury page.")
         } else {
-            risks.append("Live injury/availability context was unavailable.")
-        }
-
-        if let handle = prop.handlePercent, let tickets = prop.betPercent {
-            let publicEdge = handle - tickets
-            if publicEdge >= 8 {
-                score += 5
-                reasons.append(String(format: "Public money adds secondary confirmation: %.0f%% handle vs %.0f%% tickets.", handle, tickets))
-            } else if publicEdge >= 3 {
-                score += 2
+            availabilityQuality = 2
+            if !injuryFlags.isEmpty {
+                cautionAvailability = true
+                evidence -= 25
+                risks.append(contentsOf: injuryFlags)
+            } else {
+                risks.append("Starter/active status has not been Deep Checked.")
             }
-        }
-
-        if let movement {
-            score += max(-4, min(5, movement.supportPoints))
-            quality += 4
-            reasons.append(movement.summary)
         }
 
         switch lineStatus {
         case .live:
-            score += 8
+            freshnessQuality = 10
+            evidence += 9
         case .mismatch:
-            score -= 40
+            evidence -= 45
+            risks.append("Current live prop line does not match the listed line.")
         case .stale:
-            score -= 35
+            freshnessQuality = 1
+            evidence -= 35
+            risks.append("Live prop line is stale.")
         case .unverified:
-            score -= 10
+            freshnessQuality = 3
+            evidence -= 8
         case .notConnected:
-            score -= 8
+            freshnessQuality = 1
+            evidence -= 5
         }
 
-        risks.append("Recent hit rate is not treated as the probability by itself; the model also uses the distribution of the game log.")
-        risks.append("Public bet popularity has little to no influence unless it confirms an independently favorable projection.")
+        if let movement {
+            historyQuality = 5
+            evidence += max(-5, min(5, movement.supportPoints))
+            reasons.append(movement.summary)
+        } else {
+            historyQuality = 1
+        }
 
-        score = min(100, max(0, score))
-        quality = min(100, max(0, quality))
+        if let handle = prop.handlePercent, let tickets = prop.betPercent {
+            publicQuality = 4
+            let splitEdge = handle - tickets
+            if splitEdge >= 10 {
+                evidence += 4
+                reasons.append(String(format: "%.0f%% handle vs %.0f%% tickets adds minor confirmation.", handle, tickets))
+            } else if splitEdge <= -8 {
+                evidence -= 3
+            }
+        } else {
+            publicQuality = 1
+        }
 
-        let severeContext = !contextFlags.isEmpty
+        risks.append("Recent hit rate is context, not the probability by itself; the model also uses the underlying game-log distribution.")
+        risks.append("Late role, matchup or lineup changes can invalidate a prop projection.")
+
+        evidence = clampInt(evidence)
+        let components = ConfidenceBreakdown(
+            stats: statsQuality,
+            market: marketQuality,
+            availability: availabilityQuality,
+            freshness: freshnessQuality,
+            history: historyQuality,
+            publicSignal: publicQuality
+        )
+        let quality = min(100, components.total)
+        let bestOdds = verification?.bestOdds ?? prop.odds
+        let ev = OddsMath.expectedValuePercent(probability: model, odds: bestOdds)
+
         let verdict: PickVerdict
-
-        if severeContext || lineStatus == .mismatch || lineStatus == .stale {
+        if severeAvailability || lineStatus == .mismatch || lineStatus == .stale {
             verdict = .pass
         } else if let model, let edge,
+                  model >= 60,
+                  edge >= 5,
+                  evidence >= 78,
+                  quality >= 70,
                   lineStatus == .live,
                   (verification?.bookCount ?? 0) >= 2,
-                  model >= 60,
-                  edge >= 4,
-                  score >= 80,
-                  quality >= 68 {
+                  !cautionAvailability {
             verdict = .lock
         } else if let model, let edge,
-                  lineStatus == .live,
                   model >= 56,
                   edge >= 2,
-                  score >= 64 {
+                  evidence >= 58,
+                  quality >= 52,
+                  lineStatus == .live,
+                  !cautionAvailability {
             verdict = .strong
-        } else if model != nil && score >= 48 {
+        } else if model != nil && evidence >= 42 {
             verdict = .consider
         } else {
             verdict = .pass
@@ -441,11 +529,13 @@ enum DecisionEngine {
             fairProbability: fair,
             marketProbability: market,
             estimatedEdge: edge,
-            evidenceScore: score,
+            expectedValuePercent: ev,
+            evidenceScore: evidence,
             dataQuality: quality,
             sourceCount: verification?.bookCount ?? 1,
             liveStatus: lineStatus,
             verdict: verdict,
+            components: components,
             reasons: reasons,
             risks: risks
         )
@@ -453,18 +543,16 @@ enum DecisionEngine {
 
     private static func fairProbability(for bet: PopularBet, board: [PopularBet]) -> Double? {
         guard let target = bet.impliedProbability else { return nil }
-
-        let marketGroup = board.filter {
+        let group = board.filter {
             $0.source == bet.source &&
             MarketKey.sameEvent($0.matchup, bet.matchup) &&
             MarketKey.normalized($0.market) == MarketKey.normalized(bet.market)
         }
-        let probabilities = marketGroup.compactMap { $0.impliedProbability }
-
-        guard probabilities.count >= 2, probabilities.count == marketGroup.count else { return nil }
+        let probabilities = group.compactMap(\.impliedProbability)
+        guard probabilities.count >= 2, probabilities.count == group.count else { return nil }
         let total = probabilities.reduce(0, +)
         guard total > 0 else { return nil }
-        return target / total * 100.0
+        return target / total * 100
     }
 
     private static func sourceCount(for bet: PopularBet, board: [PopularBet]) -> Int {
@@ -472,6 +560,14 @@ enum DecisionEngine {
             MarketKey.sameEvent($0.matchup, bet.matchup) &&
             MarketKey.sameSelection($0.side, bet.side)
         }
-        return Set(matches.map { $0.source }).count
+        return Set(matches.map(\.source)).count
+    }
+
+    private static func clamp(_ value: Double, _ lower: Double, _ upper: Double) -> Double {
+        min(upper, max(lower, value))
+    }
+
+    private static func clampInt(_ value: Int) -> Int {
+        min(100, max(0, value))
     }
 }

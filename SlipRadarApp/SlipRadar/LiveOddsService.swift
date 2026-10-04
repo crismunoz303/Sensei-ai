@@ -13,13 +13,10 @@ enum SecretStore {
             kSecReturnData as String: true,
             kSecMatchLimit as String: kSecMatchLimitOne
         ]
-
         var item: CFTypeRef?
         guard SecItemCopyMatching(query as CFDictionary, &item) == errSecSuccess,
               let data = item as? Data,
-              let value = String(data: data, encoding: .utf8) else {
-            return ""
-        }
+              let value = String(data: data, encoding: .utf8) else { return "" }
         return value
     }
 
@@ -30,11 +27,8 @@ enum SecretStore {
             kSecAttrService as String: service,
             kSecAttrAccount as String: oddsAccount
         ]
-
         SecItemDelete(base as CFDictionary)
-
         guard !trimmed.isEmpty, let data = trimmed.data(using: .utf8) else { return }
-
         var add = base
         add[kSecValueData as String] = data
         add[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly
@@ -48,53 +42,37 @@ private struct OddsAPIOutcome: Decodable {
     let price: Double
     let point: Double?
 }
-
 private struct OddsAPIMarket: Decodable {
     let key: String
     let lastUpdate: String?
     let outcomes: [OddsAPIOutcome]
-
-    enum CodingKeys: String, CodingKey {
-        case key
-        case lastUpdate = "last_update"
-        case outcomes
-    }
+    enum CodingKeys: String, CodingKey { case key, outcomes; case lastUpdate = "last_update" }
 }
-
 private struct OddsAPIBookmaker: Decodable {
     let key: String
     let title: String
     let lastUpdate: String?
     let markets: [OddsAPIMarket]
-
-    enum CodingKeys: String, CodingKey {
-        case key, title, markets
-        case lastUpdate = "last_update"
-    }
+    enum CodingKeys: String, CodingKey { case key, title, markets; case lastUpdate = "last_update" }
 }
-
 private struct OddsAPIGame: Decodable {
     let id: String
     let commenceTime: String
     let homeTeam: String
     let awayTeam: String
     let bookmakers: [OddsAPIBookmaker]
-
     enum CodingKeys: String, CodingKey {
-        case id
+        case id, bookmakers
         case commenceTime = "commence_time"
         case homeTeam = "home_team"
         case awayTeam = "away_team"
-        case bookmakers
     }
 }
-
 private struct OddsAPIEventStub: Decodable {
     let id: String
     let commenceTime: String
     let homeTeam: String
     let awayTeam: String
-
     enum CodingKeys: String, CodingKey {
         case id
         case commenceTime = "commence_time"
@@ -102,9 +80,11 @@ private struct OddsAPIEventStub: Decodable {
         case awayTeam = "away_team"
     }
 }
-
+private struct OddsAPISport: Decodable {
+    let key: String
+    let active: Bool
+}
 private struct QuoteRow {
-    let eventID: String
     let event: String
     let market: String
     let outcome: String
@@ -117,13 +97,25 @@ private struct QuoteRow {
     let updated: Date
 }
 
+private actor LiveOddsCache {
+    static let shared = LiveOddsCache()
+    private var values: [String: (Date, [LiveMarketConsensus])] = [:]
+    func get(_ key: String, maxAge: TimeInterval) -> [LiveMarketConsensus]? {
+        guard let item = values[key], Date().timeIntervalSince(item.0) <= maxAge else { return nil }
+        return item.1
+    }
+    func set(_ value: [LiveMarketConsensus], key: String) { values[key] = (Date(), value) }
+}
+
 enum LiveOddsService {
     static let preferredBooks = ["draftkings", "fanduel", "betmgm", "williamhill_us"]
 
-    static func fetchTeamConsensus(sport: SportFilter, apiKey: String) async throws -> [LiveMarketConsensus] {
+    static func fetchTeamConsensus(sport: SportFilter, apiKey: String, force: Bool = false) async throws -> [LiveMarketConsensus] {
         guard let sportKey = sport.oddsAPISportKey else { throw SlipRadarError.unsupportedSport }
         let key = apiKey.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !key.isEmpty else { throw SlipRadarError.liveOddsNotConfigured }
+
+        if !force, let cached = await LiveOddsCache.shared.get(sportKey, maxAge: 120) { return cached }
 
         var components = URLComponents(string: "https://api.the-odds-api.com/v4/sports/\(sportKey)/odds")!
         components.queryItems = [
@@ -134,9 +126,64 @@ enum LiveOddsService {
             URLQueryItem(name: "oddsFormat", value: "american"),
             URLQueryItem(name: "dateFormat", value: "iso")
         ]
-
         let games: [OddsAPIGame] = try await fetchJSON(components.url!)
-        return consensus(from: games.flatMap(teamQuoteRows))
+        let result = consensus(from: games.flatMap(teamQuoteRows))
+        await LiveOddsCache.shared.set(result, key: sportKey)
+        return result
+    }
+
+    static func fetchAllActiveTeamBoards(apiKey: String) async throws -> [SportFilter: [LiveMarketConsensus]] {
+        let key = apiKey.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !key.isEmpty else { throw SlipRadarError.liveOddsNotConfigured }
+
+        var components = URLComponents(string: "https://api.the-odds-api.com/v4/sports")!
+        components.queryItems = [URLQueryItem(name: "apiKey", value: key)]
+        let active: [OddsAPISport] = try await fetchJSON(components.url!)
+        let activeKeys = Set(active.filter(\.active).map(\.key))
+        let sports = SportFilter.modeledSports.filter { sport in
+            guard let key = sport.oddsAPISportKey else { return false }
+            return activeKeys.contains(key)
+        }
+
+        return await withTaskGroup(of: (SportFilter, [LiveMarketConsensus]?).self) { group in
+            for sport in sports {
+                group.addTask {
+                    (sport, try? await fetchTeamConsensus(sport: sport, apiKey: key))
+                }
+            }
+            var output: [SportFilter: [LiveMarketConsensus]] = [:]
+            for await (sport, board) in group {
+                if let board, !board.isEmpty {
+                    output[sport] = board
+                }
+            }
+            return output
+        }
+    }
+
+    static func makeBets(from consensus: [LiveMarketConsensus], sport: SportFilter) -> [PopularBet] {
+        consensus.map { item in
+            let side: String
+            if item.market == "Spread", let point = item.point {
+                side = "\(item.outcome) \(formatSigned(point))"
+            } else if item.market == "Total", let point = item.point {
+                side = "\(item.outcome) \(formatPoint(point))"
+            } else {
+                side = item.outcome
+            }
+            return PopularBet(
+                source: .multiBook,
+                matchup: item.event,
+                side: side,
+                market: item.market,
+                startTime: item.lastUpdated.formatted(date: .omitted, time: .shortened),
+                odds: item.bestOdds,
+                betsPercent: 0,
+                moneyPercent: nil,
+                splitDifference: nil,
+                sport: sport
+            )
+        }
     }
 
     static func verifyProp(_ prop: PropPick, sport: SportFilter, apiKey: String) async throws -> LivePropVerification {
@@ -144,47 +191,16 @@ enum LiveOddsService {
         let key = apiKey.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !key.isEmpty else { throw SlipRadarError.liveOddsNotConfigured }
         guard let marketKey = propMarketKey(prop, sport: sport) else {
-            return LivePropVerification(
-                status: .unverified,
-                event: prop.event,
-                market: prop.market,
-                player: prop.playerName,
-                direction: prop.direction,
-                requestedPoint: prop.threshold,
-                livePoint: nil,
-                fairProbability: nil,
-                averageImpliedProbability: nil,
-                bestOdds: nil,
-                bookCount: 0,
-                books: [],
-                checkedAt: Date(),
-                note: "This prop type is not mapped to a live multi-book market yet."
-            )
+            return unverified(prop, note: "This prop type is not mapped to a live multi-book market yet.")
         }
 
         var eventComponents = URLComponents(string: "https://api.the-odds-api.com/v4/sports/\(sportKey)/events")!
         eventComponents.queryItems = [URLQueryItem(name: "apiKey", value: key)]
         let events: [OddsAPIEventStub] = try await fetchJSON(eventComponents.url!)
 
-        guard let event = events.max(by: { lhs, rhs in
-            eventMatchScore(lhs, prop.event) < eventMatchScore(rhs, prop.event)
-        }), eventMatchScore(event, prop.event) >= 0.55 else {
-            return LivePropVerification(
-                status: .unverified,
-                event: prop.event,
-                market: prop.market,
-                player: prop.playerName,
-                direction: prop.direction,
-                requestedPoint: prop.threshold,
-                livePoint: nil,
-                fairProbability: nil,
-                averageImpliedProbability: nil,
-                bestOdds: nil,
-                bookCount: 0,
-                books: [],
-                checkedAt: Date(),
-                note: "The current event could not be matched to the live multi-book board."
-            )
+        guard let event = events.max(by: { eventMatchScore($0, prop.event) < eventMatchScore($1, prop.event) }),
+              eventMatchScore(event, prop.event) >= 0.55 else {
+            return unverified(prop, note: "The current event could not be matched to the live multi-book board.")
         }
 
         var oddsComponents = URLComponents(string: "https://api.the-odds-api.com/v4/sports/\(sportKey)/events/\(event.id)/odds")!
@@ -199,42 +215,17 @@ enum LiveOddsService {
 
         let game: OddsAPIGame = try await fetchJSON(oddsComponents.url!)
         let rows = propQuoteRows(game, marketKey: marketKey, prop: prop)
-
-        guard !rows.isEmpty else {
-            return LivePropVerification(
-                status: .unverified,
-                event: prop.event,
-                market: prop.market,
-                player: prop.playerName,
-                direction: prop.direction,
-                requestedPoint: prop.threshold,
-                livePoint: nil,
-                fairProbability: nil,
-                averageImpliedProbability: nil,
-                bestOdds: nil,
-                bookCount: 0,
-                books: [],
-                checkedAt: Date(),
-                note: "No matching live player/side was returned by the selected sportsbooks."
-            )
-        }
+        guard !rows.isEmpty else { return unverified(prop, note: "No matching live player/side was returned by the selected sportsbooks.") }
 
         let requestedPoint = prop.threshold
-        let exactRows: [QuoteRow]
-        if let requestedPoint {
-            exactRows = rows.filter { row in
-                guard let point = row.point else { return false }
-                return abs(point - requestedPoint) < 0.001
-            }
-        } else {
-            exactRows = rows
+        let exact = requestedPoint == nil ? rows : rows.filter { row in
+            guard let p = row.point, let requestedPoint else { return false }
+            return abs(p - requestedPoint) < 0.001
         }
-
         let chosen: [QuoteRow]
         let status: LiveLineStatus
-
-        if !exactRows.isEmpty {
-            chosen = exactRows
+        if !exact.isEmpty {
+            chosen = exact
             status = .live
         } else {
             let grouped = Dictionary(grouping: rows) { $0.point ?? -9999 }
@@ -244,17 +235,16 @@ enum LiveOddsService {
 
         let fair = chosen.map(\.fairProbability).reduce(0, +) / Double(chosen.count)
         let implied = chosen.map(\.impliedProbability).reduce(0, +) / Double(chosen.count)
-        let best = chosen.map(\.price).max()
+        let bestRow = chosen.max(by: { $0.price < $1.price })
         let books = Array(Set(chosen.map(\.bookmaker))).sorted()
         let livePoint = chosen.compactMap(\.point).first
         let note: String
-
         if status == .live {
             note = "\(books.count) live book\(books.count == 1 ? "" : "s") confirm the exact prop line."
         } else if let requestedPoint, let livePoint {
-            note = "Requested line \(formatPoint(requestedPoint)) does not match the live consensus line \(formatPoint(livePoint))."
+            note = "Requested line \(formatPoint(requestedPoint)) does not match live consensus \(formatPoint(livePoint))."
         } else {
-            note = "The player/market exists live, but the exact requested line could not be confirmed."
+            note = "The market exists live, but the exact requested line could not be confirmed."
         }
 
         return LivePropVerification(
@@ -267,7 +257,8 @@ enum LiveOddsService {
             livePoint: livePoint,
             fairProbability: fair,
             averageImpliedProbability: implied,
-            bestOdds: best.map(OddsMath.americanString),
+            bestOdds: bestRow.map { OddsMath.americanString($0.price) },
+            bestBook: bestRow?.bookmaker,
             bookCount: books.count,
             books: books,
             checkedAt: Date(),
@@ -277,82 +268,68 @@ enum LiveOddsService {
 
     static func matchConsensus(for bet: PopularBet, in live: [LiveMarketConsensus]) -> LiveMarketConsensus? {
         let marketName = normalizedMarket(bet.market)
-        let eventMatches = live.filter {
-            MarketKey.sameEvent($0.event, bet.matchup) && $0.market == marketName
-        }
-
-        guard !eventMatches.isEmpty else { return nil }
-
+        let matches = live.filter { MarketKey.sameEvent($0.event, bet.matchup) && $0.market == marketName }
+        guard !matches.isEmpty else { return nil }
         let selectionPoint = numericPoint(bet.side)
-
-        let scored = eventMatches.map { item -> (LiveMarketConsensus, Double) in
+        let scored = matches.map { item -> (LiveMarketConsensus, Double) in
             var score = selectionScore(bet.side, item.outcome)
             if let selectionPoint, let point = item.point {
-                let distance = abs(selectionPoint - point)
-                score += distance < 0.001 ? 0.5 : max(0, 0.25 - distance * 0.05)
+                score += abs(selectionPoint - point) < 0.001 ? 0.5 : 0
             } else if selectionPoint == nil && item.point == nil {
                 score += 0.2
             }
             return (item, score)
         }
-
         return scored.max(by: { $0.1 < $1.1 }).flatMap { $0.1 >= 0.45 ? $0.0 : nil }
     }
 
     static func lineStatus(for bet: PopularBet, consensus: LiveMarketConsensus?) -> LiveLineStatus {
         guard let consensus else { return .unverified }
-
-        if Date().timeIntervalSince(consensus.lastUpdated) > 15 * 60 {
-            return .stale
-        }
-
-        let requested = numericPoint(bet.side)
-        if let requested, let livePoint = consensus.point {
+        if Date().timeIntervalSince(consensus.lastUpdated) > 15 * 60 { return .stale }
+        if let requested = numericPoint(bet.side), let livePoint = consensus.point {
             return abs(requested - livePoint) < 0.001 ? .live : .mismatch
         }
         return .live
     }
 
+    static func numericPoint(_ text: String) -> Double? {
+        guard let regex = try? NSRegularExpression(pattern: #"[-+]?\d+(?:\.\d+)?"#) else { return nil }
+        let ns = text as NSString
+        let matches = regex.matches(in: text, range: NSRange(location: 0, length: ns.length))
+        guard let match = matches.last else { return nil }
+        return Double(ns.substring(with: match.range))
+    }
+
     private static func fetchJSON<T: Decodable>(_ url: URL) async throws -> T {
         var request = URLRequest(url: url)
         request.timeoutInterval = 20
-        request.setValue("SlipRadar/0.9", forHTTPHeaderField: "User-Agent")
-
+        request.cachePolicy = .reloadIgnoringLocalCacheData
+        request.setValue("SlipRadar/1.0", forHTTPHeaderField: "User-Agent")
         let (data, response) = try await URLSession.shared.data(for: request)
-        guard let http = response as? HTTPURLResponse, (200...299).contains(http.statusCode) else {
-            throw SlipRadarError.noData
-        }
+        guard let http = response as? HTTPURLResponse, (200...299).contains(http.statusCode) else { throw SlipRadarError.noData }
         return try JSONDecoder().decode(T.self, from: data)
     }
 
     private static func teamQuoteRows(_ game: OddsAPIGame) -> [QuoteRow] {
         var rows: [QuoteRow] = []
         let event = "\(game.awayTeam) @ \(game.homeTeam)"
-
         for bookmaker in game.bookmakers {
             for market in bookmaker.markets {
                 let displayMarket = normalizedMarket(market.key)
                 let updated = isoDate(market.lastUpdate ?? bookmaker.lastUpdate) ?? Date()
-
                 let groups = Dictionary(grouping: market.outcomes) { outcome -> String in
                     switch market.key {
-                    case "spreads":
-                        return String(format: "%.3f", abs(outcome.point ?? 0))
-                    case "totals":
-                        return String(format: "%.3f", outcome.point ?? 0)
-                    default:
-                        return "all"
+                    case "spreads": return String(format: "%.3f", abs(outcome.point ?? 0))
+                    case "totals": return String(format: "%.3f", outcome.point ?? 0)
+                    default: return "all"
                     }
                 }
-
                 for outcomes in groups.values {
                     let implied = outcomes.map { OddsMath.impliedProbability(fromAmerican: $0.price) }
                     let total = implied.reduce(0, +)
                     guard total > 0 else { continue }
-
                     for (index, outcome) in outcomes.enumerated() {
                         rows.append(QuoteRow(
-                            eventID: game.id,
                             event: event,
                             market: displayMarket,
                             outcome: outcome.name,
@@ -360,7 +337,7 @@ enum LiveOddsService {
                             point: outcome.point,
                             bookmaker: bookmaker.title,
                             price: outcome.price,
-                            fairProbability: implied[index] / total * 100.0,
+                            fairProbability: implied[index] / total * 100,
                             impliedProbability: implied[index],
                             updated: updated
                         ))
@@ -373,38 +350,26 @@ enum LiveOddsService {
 
     private static func propQuoteRows(_ game: OddsAPIGame, marketKey: String, prop: PropPick) -> [QuoteRow] {
         let player = MarketKey.normalized(prop.playerName)
-        let desiredDirection = prop.direction?.lowercased()
+        let desired = prop.direction?.lowercased()
         var rows: [QuoteRow] = []
-
         for bookmaker in game.bookmakers {
             for market in bookmaker.markets where market.key == marketKey {
                 let updated = isoDate(market.lastUpdate ?? bookmaker.lastUpdate) ?? Date()
-
-                let playerOutcomes = market.outcomes.filter { outcome in
-                    let description = MarketKey.normalized(outcome.description ?? "")
+                let targets = market.outcomes.filter { outcome in
+                    let desc = MarketKey.normalized(outcome.description ?? "")
                     let name = MarketKey.normalized(outcome.name)
-                    let playerMatches = !player.isEmpty && (
-                        description == player ||
-                        description.contains(player) ||
-                        player.contains(description)
-                    )
-                    let directionMatches = desiredDirection == nil || name == desiredDirection
-                    return playerMatches && directionMatches
+                    let playerMatches = !player.isEmpty && (desc == player || desc.contains(player) || player.contains(desc))
+                    return playerMatches && (desired == nil || name == desired)
                 }
-
-                for target in playerOutcomes {
-                    let pair = market.outcomes.filter { candidate in
-                        MarketKey.normalized(candidate.description ?? "") == MarketKey.normalized(target.description ?? "") &&
-                        abs((candidate.point ?? -9999) - (target.point ?? -9999)) < 0.001
+                for target in targets {
+                    let pair = market.outcomes.filter {
+                        MarketKey.normalized($0.description ?? "") == MarketKey.normalized(target.description ?? "") &&
+                        abs(($0.point ?? -9999) - (target.point ?? -9999)) < 0.001
                     }
                     let implied = pair.map { OddsMath.impliedProbability(fromAmerican: $0.price) }
                     let total = implied.reduce(0, +)
-                    guard let index = pair.firstIndex(where: {
-                        $0.name == target.name && $0.price == target.price && $0.point == target.point
-                    }), total > 0 else { continue }
-
+                    guard let index = pair.firstIndex(where: { $0.name == target.name && $0.price == target.price && $0.point == target.point }), total > 0 else { continue }
                     rows.append(QuoteRow(
-                        eventID: game.id,
                         event: "\(game.awayTeam) @ \(game.homeTeam)",
                         market: marketKey,
                         outcome: target.name,
@@ -412,7 +377,7 @@ enum LiveOddsService {
                         point: target.point,
                         bookmaker: bookmaker.title,
                         price: target.price,
-                        fairProbability: implied[index] / total * 100.0,
+                        fairProbability: implied[index] / total * 100,
                         impliedProbability: implied[index],
                         updated: updated
                     ))
@@ -424,39 +389,38 @@ enum LiveOddsService {
 
     private static func consensus(from rows: [QuoteRow]) -> [LiveMarketConsensus] {
         let grouped = Dictionary(grouping: rows) { row in
-            [
-                MarketKey.normalized(row.event),
-                row.market,
-                MarketKey.normalized(row.outcome),
-                row.point.map { String(format: "%.3f", $0) } ?? "nil"
-            ].joined(separator: "|")
+            [MarketKey.normalized(row.event), row.market, MarketKey.normalized(row.outcome), row.point.map { String(format: "%.3f", $0) } ?? "nil"].joined(separator: "|")
         }
-
         return grouped.values.compactMap { group in
             guard let first = group.first else { return nil }
             let fair = group.map(\.fairProbability).reduce(0, +) / Double(group.count)
             let implied = group.map(\.impliedProbability).reduce(0, +) / Double(group.count)
-            let best = group.map(\.price).max() ?? 0
+            guard let bestRow = group.max(by: { $0.price < $1.price }) else { return nil }
             let books = Array(Set(group.map(\.bookmaker))).sorted()
             return LiveMarketConsensus(
-                id: [
-                    MarketKey.normalized(first.event),
-                    first.market,
-                    MarketKey.normalized(first.outcome),
-                    first.point.map { String($0) } ?? "nil"
-                ].joined(separator: "|"),
+                id: [MarketKey.normalized(first.event), first.market, MarketKey.normalized(first.outcome), first.point.map { String($0) } ?? "nil"].joined(separator: "|"),
                 event: first.event,
                 market: first.market,
                 outcome: first.outcome,
                 point: first.point,
                 fairProbability: fair,
                 averageImpliedProbability: implied,
-                bestOdds: OddsMath.americanString(best),
+                bestOdds: OddsMath.americanString(bestRow.price),
+                bestBook: bestRow.bookmaker,
                 bookCount: books.count,
                 books: books,
                 lastUpdated: group.map(\.updated).max() ?? Date()
             )
         }
+    }
+
+    private static func unverified(_ prop: PropPick, note: String) -> LivePropVerification {
+        LivePropVerification(
+            status: .unverified, event: prop.event, market: prop.market, player: prop.playerName,
+            direction: prop.direction, requestedPoint: prop.threshold, livePoint: nil,
+            fairProbability: nil, averageImpliedProbability: nil, bestOdds: nil, bestBook: nil,
+            bookCount: 0, books: [], checkedAt: Date(), note: note
+        )
     }
 
     private static func normalizedMarket(_ market: String) -> String {
@@ -470,7 +434,6 @@ enum LiveOddsService {
 
     private static func propMarketKey(_ prop: PropPick, sport: SportFilter) -> String? {
         let text = (prop.market + " " + prop.line).lowercased()
-
         switch sport {
         case .nba, .wnba, .ncaab:
             if text.contains("point") && text.contains("rebound") && text.contains("assist") { return "player_points_rebounds_assists" }
@@ -499,41 +462,32 @@ enum LiveOddsService {
             if text.contains("goal") { return "player_goals" }
             if text.contains("assist") { return "player_assists" }
             if text.contains("point") { return "player_points" }
-        case .soccer, .all:
-            return nil
+        case .soccer, .all: return nil
         }
-
         return nil
     }
 
     private static func eventMatchScore(_ event: OddsAPIEventStub, _ text: String) -> Double {
-        let target = MarketKey.eventTokens(text)
-        let eventTokens = MarketKey.eventTokens("\(event.awayTeam) @ \(event.homeTeam)")
-        guard !target.isEmpty, !eventTokens.isEmpty else { return 0 }
-        return Double(target.intersection(eventTokens).count) / Double(min(target.count, eventTokens.count))
+        let a = MarketKey.eventTokens(text)
+        let b = MarketKey.eventTokens("\(event.awayTeam) @ \(event.homeTeam)")
+        guard !a.isEmpty, !b.isEmpty else { return 0 }
+        return Double(a.intersection(b).count) / Double(min(a.count, b.count))
     }
-
     private static func selectionScore(_ lhs: String, _ rhs: String) -> Double {
         let a = Set(MarketKey.selectionBase(lhs).split(separator: " ").map(String.init))
         let b = Set(MarketKey.selectionBase(rhs).split(separator: " ").map(String.init))
         guard !a.isEmpty, !b.isEmpty else { return 0 }
         return Double(a.intersection(b).count) / Double(min(a.count, b.count))
     }
-
-    private static func numericPoint(_ text: String) -> Double? {
-        guard let regex = try? NSRegularExpression(pattern: #"[-+]?\d+(?:\.\d+)?"#) else { return nil }
-        let ns = text as NSString
-        let matches = regex.matches(in: text, range: NSRange(location: 0, length: ns.length))
-        guard let match = matches.last else { return nil }
-        return Double(ns.substring(with: match.range))
-    }
-
     private static func isoDate(_ value: String?) -> Date? {
         guard let value else { return nil }
         return ISO8601DateFormatter().date(from: value)
     }
-
     private static func formatPoint(_ value: Double) -> String {
         value.rounded() == value ? String(Int(value)) : String(format: "%.1f", value)
+    }
+    private static func formatSigned(_ value: Double) -> String {
+        let base = formatPoint(abs(value))
+        return value >= 0 ? "+\(base)" : "-\(base)"
     }
 }

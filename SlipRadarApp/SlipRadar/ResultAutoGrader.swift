@@ -3,17 +3,35 @@ import Foundation
 enum ResultAutoGrader {
     static func grade(_ pick: TrackedPick) async -> PickOutcome? {
         guard pick.outcome == .pending,
-              pick.playerName == nil,
               let sportName = pick.sport,
               let sport = SportFilter(rawValue: sportName),
-              let route = sport.espnRoute,
               sport != .all else {
             return nil
         }
 
-        for offset in 0...3 {
-            guard let date = Calendar.current.date(byAdding: .day, value: offset, to: pick.addedAt) else { continue }
+        if let player = pick.playerName,
+           let threshold = pick.threshold,
+           let direction = pick.direction {
+            if let result = await StatProjectionService.latestPlayerStat(
+                playerName: player,
+                market: pick.market,
+                line: pick.title,
+                sport: sport,
+                after: pick.addedAt
+            ) {
+                guard result.date <= Date().addingTimeInterval(2 * 3600),
+                      result.date <= pick.addedAt.addingTimeInterval(5 * 86400) else {
+                    return nil
+                }
+                return grade(value: result.value, threshold: threshold, direction: direction)
+            }
+            return nil
+        }
 
+        guard let route = sport.espnRoute else { return nil }
+
+        for offset in 0...4 {
+            guard let date = Calendar.current.date(byAdding: .day, value: offset, to: pick.addedAt) else { continue }
             do {
                 let finals = try await fetchFinals(route: route, date: date)
                 guard let game = bestMatch(for: pick.event, in: finals) else { continue }
@@ -22,7 +40,6 @@ enum ResultAutoGrader {
                 continue
             }
         }
-
         return nil
     }
 
@@ -48,13 +65,13 @@ enum ResultAutoGrader {
         )!
         components.queryItems = [
             URLQueryItem(name: "dates", value: formatter.string(from: date)),
-            URLQueryItem(name: "limit", value: "100")
+            URLQueryItem(name: "limit", value: "200")
         ]
 
         var request = URLRequest(url: components.url!)
         request.timeoutInterval = 15
         request.cachePolicy = .reloadIgnoringLocalCacheData
-        request.setValue("SlipRadar/0.9", forHTTPHeaderField: "User-Agent")
+        request.setValue("SlipRadar/1.0", forHTTPHeaderField: "User-Agent")
 
         let (data, response) = try await URLSession.shared.data(for: request)
         guard let http = response as? HTTPURLResponse,
@@ -125,12 +142,12 @@ enum ResultAutoGrader {
         if market.contains("total") {
             guard let line = numericPoint(pick.title) else { return nil }
             let total = game.homeScore + game.awayScore
-            if title.contains("under") { return compare(total, line: line, direction: "under") }
-            if title.contains("over") { return compare(total, line: line, direction: "over") }
+            if title.contains("under") { return grade(value: total, threshold: line, direction: "Under") }
+            if title.contains("over") { return grade(value: total, threshold: line, direction: "Over") }
             return nil
         }
 
-        if market.contains("moneyline") {
+        if market.contains("moneyline") || market == "side" {
             let selectedHome = teamScore(pick.title, game.homeTeam) >= teamScore(pick.title, game.awayTeam)
             let selected = selectedHome ? game.homeScore : game.awayScore
             let opponent = selectedHome ? game.awayScore : game.homeScore
@@ -152,10 +169,12 @@ enum ResultAutoGrader {
         return nil
     }
 
-    private static func compare(_ value: Double, line: Double, direction: String) -> PickOutcome {
-        if value == line { return .push }
-        if direction == "under" { return value < line ? .win : .loss }
-        return value > line ? .win : .loss
+    private static func grade(value: Double, threshold: Double, direction: String) -> PickOutcome {
+        if abs(value - threshold) < 0.0001 { return .push }
+        if direction.lowercased() == "under" {
+            return value < threshold ? .win : .loss
+        }
+        return value > threshold ? .win : .loss
     }
 
     private static func eventScore(_ lhs: String, _ rhs: String) -> Double {
