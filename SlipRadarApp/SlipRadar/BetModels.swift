@@ -1,26 +1,31 @@
 import Foundation
 
-enum BetSource: String, CaseIterable, Identifiable {
+enum BetSource: String, CaseIterable, Identifiable, Codable {
     case action = "Action Network"
     case draftKings = "DraftKings"
-
     var id: String { rawValue }
 }
 
 enum OddsMath {
-    static func impliedProbability(from odds: String) -> Double? {
+    static func americanValue(from odds: String) -> Double? {
         let cleaned = odds
             .trimmingCharacters(in: .whitespacesAndNewlines)
             .replacingOccurrences(of: "−", with: "-")
-        guard let value = Double(cleaned) else { return nil }
+        guard let value = Double(cleaned), value != 0 else { return nil }
+        return value
+    }
 
-        if value > 0 {
-            return 100.0 * (100.0 / (value + 100.0))
-        } else if value < 0 {
-            let absolute = abs(value)
-            return 100.0 * (absolute / (absolute + 100.0))
-        }
-        return nil
+    static func impliedProbability(from odds: String) -> Double? {
+        guard let value = americanValue(from: odds) else { return nil }
+        if value > 0 { return 100.0 * 100.0 / (value + 100.0) }
+        let absolute = abs(value)
+        return 100.0 * absolute / (absolute + 100.0)
+    }
+
+    static func decimalOdds(from odds: String) -> Double? {
+        guard let value = americanValue(from: odds) else { return nil }
+        if value > 0 { return 1.0 + value / 100.0 }
+        return 1.0 + 100.0 / abs(value)
     }
 }
 
@@ -36,93 +41,14 @@ struct PopularBet: Identifiable, Hashable {
     let moneyPercent: Int?
     let splitDifference: Int?
 
-    var lockScore: Int {
-        guard let moneyPercent else { return min(85, betsPercent) }
-        let confirmation = max(0, moneyPercent - betsPercent)
-        return min(99, max(betsPercent, moneyPercent) + confirmation / 2)
-    }
-
-    var isLock: Bool {
-        guard let moneyPercent else {
-            return betsPercent >= 82
-        }
-        let edge = moneyPercent - betsPercent
-        let strongConsensus = betsPercent >= 65 && moneyPercent >= 70
-        let sharpMoney = moneyPercent >= 68 && edge >= 8
-        let eliteConsensus = betsPercent >= 78 && moneyPercent >= 78
-        return strongConsensus || sharpMoney || eliteConsensus
-    }
-
     var impliedProbability: Double? {
         guard let odds else { return nil }
         return OddsMath.impliedProbability(from: odds)
     }
 
-    var displayedProbability: Int {
-        if let impliedProbability {
-            return Int(impliedProbability.rounded())
-        }
-        return min(95, max(50, lockScore))
-    }
-
-    var probabilityLabel: String {
-        impliedProbability == nil ? "SIGNAL %" : "IMPLIED %"
-    }
-
-    var lockReason: String {
-        guard let moneyPercent else {
-            return "\(betsPercent)% of bets"
-        }
-        let edge = moneyPercent - betsPercent
-        if edge >= 8 {
-            return "\(moneyPercent)% money vs \(betsPercent)% bets (+\(edge)%)"
-        }
-        return "\(betsPercent)% bets / \(moneyPercent)% money"
-    }
-
-    var evidenceStrength: String {
-        guard let moneyPercent else { return impliedProbability == nil ? "LIMITED" : "MODERATE" }
-        let edge = moneyPercent - betsPercent
-        if impliedProbability != nil && moneyPercent >= 72 && edge >= 8 { return "STRONG" }
-        if moneyPercent >= 68 || edge >= 6 { return "GOOD" }
-        return "MODERATE"
-    }
-
-    var evidenceNotes: [String] {
-        var notes: [String] = []
-
-        if let impliedProbability {
-            notes.append(String(format: "Market price implies %.1f%% before removing sportsbook margin.", impliedProbability))
-        } else {
-            notes.append("No usable sportsbook price was available, so there is no market-implied probability.")
-        }
-
-        if let moneyPercent {
-            let edge = moneyPercent - betsPercent
-            if edge >= 8 {
-                notes.append("\(moneyPercent)% of money vs \(betsPercent)% of bets: +\(edge) points of money-over-ticket support.")
-            } else {
-                notes.append("\(betsPercent)% of bets and \(moneyPercent)% of money are on this side.")
-            }
-        } else {
-            notes.append("No verified money percentage is available, so public support is less informative.")
-        }
-
-        if source == .draftKings {
-            notes.append("DraftKings split-feed lines can differ by jurisdiction; verify the exact line in your sportsbook before betting.")
-        }
-
-        return notes
-    }
-
-    var riskNote: String {
-        if source == .draftKings {
-            return "Risk: split-feed line may not match your local book."
-        }
-        if moneyPercent == nil {
-            return "Risk: no money-split confirmation."
-        }
-        return "Risk: market pricing and public splits can still be wrong."
+    var moneyEdge: Int? {
+        guard let moneyPercent else { return nil }
+        return moneyPercent - betsPercent
     }
 }
 
@@ -141,6 +67,7 @@ enum SportFilter: String, CaseIterable, Identifiable {
 
     var actionURL: URL {
         switch self {
+        case .all: return URL(string: "https://www.actionnetwork.com/public-betting/")!
         case .nfl: return URL(string: "https://www.actionnetwork.com/nfl/public-betting/")!
         case .ncaaf: return URL(string: "https://www.actionnetwork.com/ncaaf/public-betting/")!
         case .nba: return URL(string: "https://www.actionnetwork.com/nba/public-betting/")!
@@ -149,50 +76,47 @@ enum SportFilter: String, CaseIterable, Identifiable {
         case .nhl: return URL(string: "https://www.actionnetwork.com/nhl/public-betting/")!
         case .wnba: return URL(string: "https://www.actionnetwork.com/wnba/public-betting/")!
         case .soccer: return URL(string: "https://www.actionnetwork.com/soccer/public-betting/")!
-        case .all: return URL(string: "https://www.actionnetwork.com/public-betting/")!
         }
     }
 
     var draftKingsURL: URL {
-        let base = "https://dknetwork.draftkings.com/draftkings-sportsbook-betting-splits/"
-        let group: String
-        switch self {
-        case .nfl: group = "NFL"
-        case .ncaaf: group = "NCAA Football"
-        case .nba: group = "NBA"
-        case .ncaab: group = "NCAA Basketball"
-        case .mlb: group = "MLB"
-        case .nhl: group = "NHL"
-        case .wnba: group = "WNBA"
-        case .soccer: group = "Soccer"
-        case .all: group = "0"
-        }
-        var components = URLComponents(string: base)!
-        components.queryItems = [
-            URLQueryItem(name: "tb_eg", value: group)
-        ]
+        var components = URLComponents(string: "https://dknetwork.draftkings.com/draftkings-sportsbook-betting-splits/")!
+        components.queryItems = [URLQueryItem(name: "tb_eg", value: draftKingsGroup)]
         return components.url!
     }
 
     var draftKingsPropsURL: URL {
-        let base = "https://dknetwork.draftkings.com/draftkings-sportsbook-player-props/"
-        let group: String
-        switch self {
-        case .nfl: group = "NFL"
-        case .ncaaf: group = "NCAA Football"
-        case .nba: group = "NBA"
-        case .ncaab: group = "NCAA Basketball"
-        case .mlb: group = "MLB"
-        case .nhl: group = "NHL"
-        case .wnba: group = "WNBA"
-        case .soccer: group = "Soccer"
-        case .all: group = "0"
-        }
-        var components = URLComponents(string: base)!
-        components.queryItems = [
-            URLQueryItem(name: "tb_eg", value: group)
-        ]
+        var components = URLComponents(string: "https://dknetwork.draftkings.com/draftkings-sportsbook-player-props/")!
+        components.queryItems = [URLQueryItem(name: "tb_eg", value: draftKingsGroup)]
         return components.url!
+    }
+
+    var contextURL: URL? {
+        switch self {
+        case .all: return nil
+        case .nfl: return URL(string: "https://www.espn.com/nfl/injuries")
+        case .ncaaf: return URL(string: "https://www.espn.com/college-football/injuries")
+        case .nba: return URL(string: "https://www.espn.com/nba/injuries")
+        case .ncaab: return URL(string: "https://www.espn.com/mens-college-basketball/injuries")
+        case .mlb: return URL(string: "https://www.espn.com/mlb/injuries")
+        case .nhl: return URL(string: "https://www.espn.com/nhl/injuries")
+        case .wnba: return URL(string: "https://www.espn.com/wnba/injuries")
+        case .soccer: return URL(string: "https://www.espn.com/soccer/injuries")
+        }
+    }
+
+    private var draftKingsGroup: String {
+        switch self {
+        case .all: return "0"
+        case .nfl: return "NFL"
+        case .ncaaf: return "NCAA Football"
+        case .nba: return "NBA"
+        case .ncaab: return "NCAA Basketball"
+        case .mlb: return "MLB"
+        case .nhl: return "NHL"
+        case .wnba: return "WNBA"
+        case .soccer: return "Soccer"
+        }
     }
 }
 
@@ -213,6 +137,7 @@ enum AppSection: String, CaseIterable, Identifiable {
     case teams = "Teams"
     case props = "Props"
     case slip = "My Slip"
+    case performance = "Track"
 
     var id: String { rawValue }
 }
@@ -228,72 +153,77 @@ struct PropPick: Identifiable, Hashable {
     let handlePercent: Double?
     let betPercent: Double?
 
-    var id: String {
-        [event, market, line, odds].joined(separator: "|")
-    }
+    var id: String { [event, market, line, odds].joined(separator: "|") }
 
     var impliedProbability: Double? {
         OddsMath.impliedProbability(from: odds)
     }
 
-    var displayedProbability: Int? {
-        impliedProbability.map { Int($0.rounded()) }
-    }
-
-    var signalLabel: String {
-        isLock ? "LOCK" : "POPULAR"
-    }
-
-    var reasonText: String {
-        if let handlePercent, let betPercent {
-            let diff = handlePercent - betPercent
-            return String(format: "%.1f%% handle / %.1f%% bets (%+.1f%%)", handlePercent, betPercent, diff)
+    var playerName: String {
+        let candidates = [line, market]
+        for candidate in candidates {
+            let lower = candidate.lowercased()
+            if let range = lower.range(of: " over ") ?? lower.range(of: " under ") {
+                let prefix = String(candidate[..<range.lowerBound]).trimmingCharacters(in: .whitespacesAndNewlines)
+                if prefix.split(separator: " ").count >= 2 { return prefix }
+            }
+            if let dash = candidate.range(of: " - ") {
+                let prefix = String(candidate[..<dash.lowerBound]).trimmingCharacters(in: .whitespacesAndNewlines)
+                if prefix.split(separator: " ").count >= 2 { return prefix }
+            }
         }
-        return "Popular public prop"
-    }
-
-    var evidenceStrength: String {
-        if let handlePercent, let betPercent {
-            let edge = handlePercent - betPercent
-            if impliedProbability != nil && handlePercent >= 70 && edge >= 8 { return "STRONG" }
-            if handlePercent >= 65 || edge >= 6 { return "GOOD" }
-        }
-        if let impliedProbability, impliedProbability >= 60 { return "MODERATE" }
-        return "LIMITED"
-    }
-
-    var evidenceNotes: [String] {
-        var notes: [String] = []
-
-        if let impliedProbability {
-            notes.append(String(format: "Sportsbook price implies %.1f%% before removing sportsbook margin.", impliedProbability))
-        } else {
-            notes.append("No usable sportsbook price is available, so probability cannot be estimated from the market.")
-        }
-
-        if let handlePercent, let betPercent {
-            let edge = handlePercent - betPercent
-            notes.append(String(format: "%.0f%% handle vs %.0f%% bets (%+.0f points).", handlePercent, betPercent, edge))
-        } else {
-            notes.append("No verified public handle-vs-bet split is available for this prop.")
-        }
-
-        notes.append("Verify the exact player, line, and price in your sportsbook before adding it to a real wager.")
-        return notes
-    }
-
-    var riskNote: String {
-        if handlePercent == nil || betPercent == nil {
-            return "Risk: market price only; no independent public split confirmation."
-        }
-        return "Risk: prop markets can move quickly with lineup, injury, and price changes."
+        return ""
     }
 }
 
-struct SlipLeg: Identifiable, Hashable {
+enum PickVerdict: String, Codable, CaseIterable {
+    case lock = "LOCK"
+    case strong = "STRONG"
+    case consider = "CONSIDER"
+    case pass = "PASS"
+
+    var rank: Int {
+        switch self {
+        case .lock: return 4
+        case .strong: return 3
+        case .consider: return 2
+        case .pass: return 1
+        }
+    }
+}
+
+struct DecisionReport {
+    let fairProbability: Double?
+    let marketProbability: Double?
+    let evidenceScore: Int
+    let dataQuality: Int
+    let sourceCount: Int
+    let verdict: PickVerdict
+    let reasons: [String]
+    let risks: [String]
+}
+
+struct ScoredBet: Identifiable {
+    let bet: PopularBet
+    let report: DecisionReport
+    var id: UUID { bet.id }
+}
+
+struct ScoredProp: Identifiable {
+    let prop: PropPick
+    let report: DecisionReport
+    var id: String { prop.id }
+}
+
+struct SlipLeg: Identifiable, Hashable, Codable {
     let id: String
     let title: String
     let subtitle: String
     let source: String
     let signal: String
+    let event: String
+    let market: String
+    let odds: String?
+    let probability: Double?
+    let evidenceScore: Int
 }
