@@ -347,9 +347,14 @@ struct ContentView: View {
 
                 Spacer()
 
-                Text("\(bet.lockScore)")
-                    .font(.system(size: 20, weight: .black))
-                    .foregroundStyle(Color.green)
+                VStack(alignment: .trailing, spacing: 1) {
+                    Text("\(bet.displayedProbability)%")
+                        .font(.system(size: 20, weight: .black))
+                        .foregroundStyle(Color.green)
+                    Text(bet.probabilityLabel)
+                        .font(.system(size: 7, weight: .bold))
+                        .foregroundStyle(.white.opacity(0.4))
+                }
             }
 
             Text(bet.matchup)
@@ -391,9 +396,17 @@ struct ContentView: View {
 
                 Spacer()
 
-                Text(prop.odds)
-                    .font(.system(size: 14, weight: .black))
-                    .foregroundStyle(Color.green)
+                VStack(alignment: .trailing, spacing: 1) {
+                    Text(prop.odds)
+                        .font(.system(size: 14, weight: .black))
+                        .foregroundStyle(Color.green)
+
+                    if let probability = prop.displayedProbability {
+                        Text("\(probability)% IMPLIED")
+                            .font(.system(size: 8, weight: .bold))
+                            .foregroundStyle(.white.opacity(0.45))
+                    }
+                }
             }
 
             Text(prop.line)
@@ -469,8 +482,8 @@ struct ContentView: View {
 
     private var footer: some View {
         VStack(spacing: 5) {
-            Text("LOCK = SlipRadar's strongest public-data signal, not a guaranteed winner.")
-            Text("Props without verified split percentages are labeled POPULAR, not LOCK.")
+            Text("IMPLIED % comes directly from sportsbook odds. SIGNAL % is SlipRadar's public-data confidence score.")
+            Text("Neither is a guaranteed result. Props without verified split percentages are labeled POPULAR, not LOCK.")
         }
         .font(.system(size: 10))
         .multilineTextAlignment(.center)
