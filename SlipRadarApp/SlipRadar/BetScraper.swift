@@ -148,6 +148,7 @@ enum BetTextParser {
                         side: firstSide ? abbr1 : abbr2,
                         market: "Side",
                         startTime: startTime,
+                        odds: nil,
                         betsPercent: betPct,
                         moneyPercent: moneyPct,
                         splitDifference: diff
@@ -221,6 +222,7 @@ enum BetTextParser {
                 continue
             }
 
+            let odds = lines[i + 1]
             let money = percent(lines[i + 2])
             let bets = percent(lines[i + 3])
 
@@ -231,6 +233,7 @@ enum BetTextParser {
                     side: option,
                     market: market,
                     startTime: startTime,
+                    odds: odds,
                     betsPercent: bets,
                     moneyPercent: money,
                     splitDifference: money - bets
