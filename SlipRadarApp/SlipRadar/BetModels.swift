@@ -4,15 +4,24 @@ enum BetSource: String, CaseIterable, Identifiable {
     case action = "Action Network"
     case draftKings = "DraftKings"
 
-    var impliedProbability: Double? {
-        OddsMath.impliedProbability(from: odds)
-    }
-
-    var displayedProbability: Int? {
-        impliedProbability.map { Int($0.rounded()) }
-    }
-
     var id: String { rawValue }
+}
+
+enum OddsMath {
+    static func impliedProbability(from odds: String) -> Double? {
+        let cleaned = odds
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .replacingOccurrences(of: "−", with: "-")
+        guard let value = Double(cleaned) else { return nil }
+
+        if value > 0 {
+            return 100.0 * (100.0 / (value + 100.0))
+        } else if value < 0 {
+            let absolute = abs(value)
+            return 100.0 * (absolute / (absolute + 100.0))
+        }
+        return nil
+    }
 }
 
 struct PopularBet: Identifiable, Hashable {
@@ -156,11 +165,11 @@ enum SlipRadarError: LocalizedError {
     }
 }
 
-
 enum AppSection: String, CaseIterable, Identifiable {
     case locks = "Locks"
     case props = "Props"
     case slip = "My Slip"
+
     var id: String { rawValue }
 }
 
@@ -179,6 +188,14 @@ struct PropPick: Identifiable, Hashable {
         [event, market, line, odds].joined(separator: "|")
     }
 
+    var impliedProbability: Double? {
+        OddsMath.impliedProbability(from: odds)
+    }
+
+    var displayedProbability: Int? {
+        impliedProbability.map { Int($0.rounded()) }
+    }
+
     var signalLabel: String {
         isLock ? "LOCK" : "POPULAR"
     }
@@ -189,22 +206,6 @@ struct PropPick: Identifiable, Hashable {
             return String(format: "%.1f%% handle / %.1f%% bets (%+.1f%%)", handlePercent, betPercent, diff)
         }
         return "Popular public prop"
-    }
-}
-
-enum OddsMath {
-    static func impliedProbability(from odds: String) -> Double? {
-        let cleaned = odds
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-            .replacingOccurrences(of: "−", with: "-")
-        guard let value = Double(cleaned) else { return nil }
-        if value > 0 {
-            return 100.0 * (100.0 / (value + 100.0))
-        } else if value < 0 {
-            let absolute = abs(value)
-            return 100.0 * (absolute / (absolute + 100.0))
-        }
-        return nil
     }
 }
 
