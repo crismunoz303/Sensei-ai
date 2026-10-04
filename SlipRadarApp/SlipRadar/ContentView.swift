@@ -25,7 +25,7 @@ struct ContentView: View {
                         } else if bets.isEmpty {
                             emptyCard
                         } else {
-                            ForEach(Array(bets.prefix(20).enumerated()), id: \.element.id) { index, bet in
+                            ForEach(Array(bets.prefix(5).enumerated()), id: \.element.id) { index, bet in
                                 betCard(rank: index + 1, bet: bet)
                             }
                         }
@@ -57,7 +57,7 @@ struct ContentView: View {
                 Text("SLIPRADAR")
                     .font(.system(size: 27, weight: .black, design: .rounded))
                     .foregroundStyle(.white)
-                Text("TODAY'S PUBLIC ACTION")
+                Text("TODAY'S LOCKS ONLY")
                     .font(.system(size: 11, weight: .bold, design: .rounded))
                     .tracking(1.6)
                     .foregroundStyle(Color.green)
@@ -106,7 +106,7 @@ struct ContentView: View {
                 .fill(loading ? Color.orange : Color.green)
                 .frame(width: 8, height: 8)
             VStack(alignment: .leading, spacing: 2) {
-                Text(loading ? "Refreshing live public data…" : "\(bets.count) public plays ranked")
+                Text(loading ? "Scanning today’s board…" : "\(bets.count) locks qualified")
                     .font(.system(size: 13, weight: .semibold))
                     .foregroundStyle(.white)
                 if let lastUpdated {
@@ -128,7 +128,7 @@ struct ContentView: View {
     private var loadingCard: some View {
         VStack(spacing: 12) {
             ProgressView().tint(.green).scaleEffect(1.2)
-            Text("Reading today's betting board…")
+            Text("Testing today's board against the lock filter…")
                 .font(.system(size: 14, weight: .semibold))
                 .foregroundStyle(.white.opacity(0.7))
         }
@@ -142,7 +142,7 @@ struct ContentView: View {
             Image(systemName: "antenna.radiowaves.left.and.right.slash")
                 .font(.system(size: 28))
                 .foregroundStyle(.orange)
-            Text(errorMessage ?? "No public betting rows are available yet.")
+            Text(errorMessage ?? "NO LOCKS TODAY")
                 .font(.system(size: 14, weight: .semibold))
                 .multilineTextAlignment(.center)
                 .foregroundStyle(.white.opacity(0.75))
@@ -170,7 +170,7 @@ struct ContentView: View {
                     Text(bet.side)
                         .font(.system(size: 20, weight: .black, design: .rounded))
                         .foregroundStyle(.white)
-                    Text("PUBLIC SIDE")
+                    Text("LOCK")
                         .font(.system(size: 9, weight: .black))
                         .foregroundStyle(Color.green)
                         .padding(.horizontal, 7)
@@ -181,6 +181,10 @@ struct ContentView: View {
                 Text(bet.matchup)
                     .font(.system(size: 13, weight: .medium))
                     .foregroundStyle(.white.opacity(0.67))
+
+                Text(bet.lockReason)
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(Color.green.opacity(0.85))
 
                 HStack(spacing: 14) {
                     stat("BETS", "\(bet.betsPercent)%")
@@ -196,10 +200,10 @@ struct ContentView: View {
             Spacer()
 
             VStack(alignment: .trailing, spacing: 7) {
-                Text("\(bet.score)")
+                Text("\(bet.lockScore)")
                     .font(.system(size: 23, weight: .black, design: .rounded))
                     .foregroundStyle(bet.score >= 70 ? Color.green : .white)
-                Text("SCORE")
+                Text("LOCK SCORE")
                     .font(.system(size: 9, weight: .bold))
                     .foregroundStyle(.white.opacity(0.35))
                 Text(bet.startTime)
@@ -228,8 +232,8 @@ struct ContentView: View {
 
     private var footer: some View {
         VStack(spacing: 5) {
-            Text("Public betting information only — not a sportsbook.")
-            Text("Data availability varies by game and source. 21+ where applicable.")
+            Text("LOCK = SlipRadar's strictest qualifying signal, not a guaranteed winner.")
+            Text("Source: Action Network public betting splits. Data availability varies. 21+ where applicable.")
         }
         .font(.system(size: 10))
         .multilineTextAlignment(.center)
@@ -245,11 +249,15 @@ struct ContentView: View {
 
     private func handleText(_ text: String) {
         let parsed = BetTextParser.parse(text)
+        let locks = parsed
+            .filter { $0.isLock }
+            .sorted { $0.lockScore > $1.lockScore }
+
         DispatchQueue.main.async {
-            self.bets = parsed
+            self.bets = Array(locks.prefix(5))
             self.loading = false
             self.lastUpdated = Date()
-            self.errorMessage = parsed.isEmpty ? "No usable public betting rows were found on this board." : nil
+            self.errorMessage = locks.isEmpty ? "NO LOCKS TODAY\nNothing passed the strict filter." : nil
         }
     }
 
