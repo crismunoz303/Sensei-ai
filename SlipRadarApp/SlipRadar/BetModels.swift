@@ -378,7 +378,7 @@ enum LiveLineStatus: String, Codable {
     }
 }
 
-struct LiveMarketConsensus: Identifiable, Hashable {
+struct LiveMarketConsensus: Identifiable, Hashable, Codable {
     let id: String
     let event: String
     let market: String
@@ -388,6 +388,7 @@ struct LiveMarketConsensus: Identifiable, Hashable {
     let averageImpliedProbability: Double
     let bestOdds: String
     let bestBook: String
+    let commenceTime: Date?
     let bookCount: Int
     let books: [String]
     let lastUpdated: Date
@@ -405,6 +406,7 @@ struct LivePropVerification: Hashable {
     let averageImpliedProbability: Double?
     let bestOdds: String?
     let bestBook: String?
+    let eventStart: Date?
     let bookCount: Int
     let books: [String]
     let checkedAt: Date
@@ -514,6 +516,7 @@ struct SlipLeg: Identifiable, Hashable, Codable {
     let threshold: Double?
     let direction: String?
     let modelVersion: String
+    var riskUnits: Double
     let addedAt: Date
 }
 
@@ -523,6 +526,13 @@ enum SourceHealthState: String, Codable {
     case loading = "LOADING"
     case failed = "FAILED"
     case off = "OFF"
+}
+
+struct OddsUsageSnapshot: Hashable {
+    let remaining: Int?
+    let used: Int?
+    let lastCost: Int?
+    let updatedAt: Date
 }
 
 struct SourceHealthItem: Identifiable, Hashable {

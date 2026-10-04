@@ -86,7 +86,11 @@ enum StatProjectionService {
 
             let sampleConfidence = min(1.0, Double(values.count) / 20.0)
             let shrunk = 50.0 + (raw - 50.0) * sampleConfidence
-            let calibration = PerformanceStore.calibrate(rawProbability: shrunk)
+            let calibration = PerformanceStore.calibrate(
+                rawProbability: shrunk,
+                sport: sport.rawValue,
+                market: metric.displayName
+            )
             let finalProbability = calibration?.probability ?? shrunk
 
             return StatProjection(
@@ -112,8 +116,7 @@ enum StatProjectionService {
 
     static func teamProjection(for matchup: String, sport: SportFilter) async -> TeamProjection? {
         guard let route = sport.espnRoute,
-              let teams = splitMatchup(matchup),
-              sport != .soccer else {
+              let teams = splitMatchup(matchup) else {
             return nil
         }
 
@@ -295,7 +298,7 @@ enum StatProjectionService {
 
         case .nfl, .ncaaf:
             if text.contains("pass") && text.contains("yard") {
-                return MetricDefinition(displayName: "Passing yards", aliases: [["passingYards", "passYards", "yds"]])
+                return MetricDefinition(displayName: "Passing yards", aliases: [["passingYards", "passYards", "passYds"]])
             }
             if text.contains("rush") && text.contains("yard") {
                 return MetricDefinition(displayName: "Rushing yards", aliases: [["rushingYards", "rushYards"]])
@@ -307,7 +310,7 @@ enum StatProjectionService {
                 return MetricDefinition(displayName: "Receptions", aliases: [["receptions", "rec"]])
             }
             if text.contains("pass") && text.contains("touchdown") {
-                return MetricDefinition(displayName: "Passing touchdowns", aliases: [["passingTouchdowns", "passTD", "td"]])
+                return MetricDefinition(displayName: "Passing touchdowns", aliases: [["passingTouchdowns", "passTD", "passingTDs"]])
             }
             if text.contains("touchdown") || text.contains("anytime td") {
                 return MetricDefinition(displayName: "Touchdowns", aliases: [["totalTouchdowns", "touchdowns", "td"]])
@@ -566,7 +569,7 @@ enum StatProjectionService {
 
         var request = URLRequest(url: url)
         request.timeoutInterval = 18
-        request.setValue("SlipRadar/0.9", forHTTPHeaderField: "User-Agent")
+        request.setValue("SlipRadar/1.0", forHTTPHeaderField: "User-Agent")
         let (data, response) = try await URLSession.shared.data(for: request)
 
         guard let http = response as? HTTPURLResponse, (200...299).contains(http.statusCode) else {
@@ -587,7 +590,10 @@ enum StatProjectionService {
 
         for (index, name) in names.enumerated() {
             let normalized = MarketKey.normalized(name)
-            if normalizedAliases.contains(where: { normalized.contains($0) || $0.contains(normalized) }) {
+            if normalizedAliases.contains(where: { alias in
+                guard alias.count >= 3, normalized.count >= 3 else { return false }
+                return normalized.contains(alias) || alias.contains(normalized)
+            }) {
                 return index
             }
         }

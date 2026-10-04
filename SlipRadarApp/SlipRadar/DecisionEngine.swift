@@ -101,6 +101,17 @@ enum DecisionEngine {
             model = clamp(current + weather.points, 2, 98)
         }
 
+        let teamCalibration: CalibrationResult? = model.flatMap {
+            PerformanceStore.calibrate(
+                rawProbability: $0,
+                sport: (bet.sport ?? .all).rawValue,
+                market: bet.market
+            )
+        }
+        if let calibrated = teamCalibration {
+            model = calibrated.probability
+        }
+
         let fallbackFair = fairProbability(for: bet, board: board)
         let fair = liveConsensus?.fairProbability ?? fallbackFair
         let market = liveConsensus?.averageImpliedProbability ?? bet.impliedProbability
@@ -139,6 +150,17 @@ enum DecisionEngine {
             ))
             if let awayRest = projection.awayRestDays, let homeRest = projection.homeRestDays {
                 reasons.append("Rest context: \(projection.awayTeam) \(awayRest)d • \(projection.homeTeam) \(homeRest)d since last recorded game.")
+            }
+            if let calibrated = teamCalibration, calibrated.sampleSize >= 20 {
+                reasons.append(
+                    String(
+                        format: "Probability calibration used %d comparable %@/%@ settled picks (observed %.1f%%).",
+                        calibrated.sampleSize,
+                        (bet.sport ?? .all).rawValue,
+                        bet.market,
+                        calibrated.observedWinRate
+                    )
+                )
             }
         } else {
             risks.append("Independent team-stat projection is unavailable; this line cannot become a LOCK.")
@@ -310,6 +332,7 @@ enum DecisionEngine {
     static func report(
         for prop: PropPick,
         projection: StatProjection?,
+        matchupProjection: TeamProjection?,
         verification: LivePropVerification?,
         contextText: String,
         availability: PlayerAvailabilitySnapshot?,
@@ -364,6 +387,23 @@ enum DecisionEngine {
             }
         } else {
             risks.append("No verified player game-log projection is available; this prop cannot become a LOCK.")
+        }
+
+        if let matchup = matchupProjection {
+            statsQuality = min(40, statsQuality + 3)
+            reasons.append(
+                String(
+                    format: "Matchup environment: projected %.1f–%.1f, total %.1f; recent defenses allowed %.1f and %.1f points/game.",
+                    matchup.projectedAwayScore,
+                    matchup.projectedHomeScore,
+                    matchup.projectedTotal,
+                    matchup.awayAverageAgainst,
+                    matchup.homeAverageAgainst
+                )
+            )
+            reasons.append("Opponent/game environment is context only; no position-specific matchup feed is being invented.")
+        } else {
+            risks.append("Opponent-specific structured matchup context is limited for this prop.")
         }
 
         if let verification, verification.status == .live, let liveFair = verification.fairProbability {

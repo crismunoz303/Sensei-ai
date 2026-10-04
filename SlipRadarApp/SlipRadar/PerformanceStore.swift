@@ -282,16 +282,48 @@ enum PerformanceStore {
         )
     }
 
-    static func calibrate(rawProbability: Double) -> CalibrationResult? {
+    static func calibrate(
+        rawProbability: Double,
+        sport: String? = nil,
+        market: String? = nil
+    ) -> CalibrationResult? {
         let settled = load().filter {
             ($0.outcome == .win || $0.outcome == .loss) &&
             $0.estimatedProbability != nil &&
             ($0.modelVersion == ModelVersion.current || $0.modelVersion == nil)
         }
 
-        let bucket = settled.filter { pick in
+        let probabilityBucket: (TrackedPick) -> Bool = { pick in
             guard let probability = pick.estimatedProbability else { return false }
             return abs(probability - rawProbability) <= 7.5
+        }
+
+        let marketKey = market.map(MarketKey.normalized)
+        let scoped = settled.filter { pick in
+            guard probabilityBucket(pick) else { return false }
+
+            let sportMatches = sport == nil || pick.sport == sport
+            let marketMatches: Bool = {
+                guard let marketKey else { return true }
+                let pickKey = MarketKey.normalized(pick.market)
+                return pickKey == marketKey || pickKey.contains(marketKey) || marketKey.contains(pickKey)
+            }()
+
+            return sportMatches && marketMatches
+        }
+
+        let sportOnly = settled.filter { pick in
+            probabilityBucket(pick) && (sport == nil || pick.sport == sport)
+        }
+        let global = settled.filter(probabilityBucket)
+
+        let bucket: [TrackedPick]
+        if scoped.count >= 20 {
+            bucket = scoped
+        } else if sportOnly.count >= 30 {
+            bucket = sportOnly
+        } else {
+            bucket = global
         }
 
         guard bucket.count >= 20 else { return nil }

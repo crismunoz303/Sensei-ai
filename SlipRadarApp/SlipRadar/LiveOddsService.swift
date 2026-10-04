@@ -95,34 +95,82 @@ private struct QuoteRow {
     let fairProbability: Double
     let impliedProbability: Double
     let updated: Date
+    let commenceTime: Date?
+}
+
+private struct PersistedOddsBoard: Codable {
+    let timestamp: Date
+    let values: [LiveMarketConsensus]
 }
 
 private actor LiveOddsCache {
     static let shared = LiveOddsCache()
-    private var values: [String: (Date, [LiveMarketConsensus])] = [:]
+    private var memory: [String: PersistedOddsBoard] = [:]
+    private let prefix = "SlipRadar.liveOddsCache.v10."
+
     func get(_ key: String, maxAge: TimeInterval) -> [LiveMarketConsensus]? {
-        guard let item = values[key], Date().timeIntervalSince(item.0) <= maxAge else { return nil }
-        return item.1
+        if let item = memory[key], Date().timeIntervalSince(item.timestamp) <= maxAge {
+            return item.values
+        }
+
+        let storageKey = prefix + key
+        if let data = UserDefaults.standard.data(forKey: storageKey),
+           let decoded = try? JSONDecoder().decode(PersistedOddsBoard.self, from: data),
+           Date().timeIntervalSince(decoded.timestamp) <= maxAge {
+            memory[key] = decoded
+            return decoded.values
+        }
+
+        return nil
     }
-    func set(_ value: [LiveMarketConsensus], key: String) { values[key] = (Date(), value) }
+
+    func set(_ value: [LiveMarketConsensus], key: String) {
+        let item = PersistedOddsBoard(timestamp: Date(), values: value)
+        memory[key] = item
+        if let data = try? JSONEncoder().encode(item) {
+            UserDefaults.standard.set(data, forKey: prefix + key)
+        }
+    }
+}
+
+private actor OddsUsageStore {
+    static let shared = OddsUsageStore()
+    private var snapshot: OddsUsageSnapshot?
+
+    func set(remaining: Int?, used: Int?, lastCost: Int?) {
+        snapshot = OddsUsageSnapshot(
+            remaining: remaining,
+            used: used,
+            lastCost: lastCost,
+            updatedAt: Date()
+        )
+    }
+
+    func get() -> OddsUsageSnapshot? { snapshot }
 }
 
 enum LiveOddsService {
-    static let preferredBooks = ["draftkings", "fanduel", "betmgm", "williamhill_us"]
+    static func usageSnapshot() async -> OddsUsageSnapshot? {
+        await OddsUsageStore.shared.get()
+    }
 
-    static func fetchTeamConsensus(sport: SportFilter, apiKey: String, force: Bool = false) async throws -> [LiveMarketConsensus] {
+    static func fetchTeamConsensus(
+        sport: SportFilter,
+        apiKey: String,
+        force: Bool = false,
+        cacheMaxAge: TimeInterval = 300
+    ) async throws -> [LiveMarketConsensus] {
         guard let sportKey = sport.oddsAPISportKey else { throw SlipRadarError.unsupportedSport }
         let key = apiKey.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !key.isEmpty else { throw SlipRadarError.liveOddsNotConfigured }
 
-        if !force, let cached = await LiveOddsCache.shared.get(sportKey, maxAge: 120) { return cached }
+        if !force, let cached = await LiveOddsCache.shared.get(sportKey, maxAge: cacheMaxAge) { return cached }
 
         var components = URLComponents(string: "https://api.the-odds-api.com/v4/sports/\(sportKey)/odds")!
         components.queryItems = [
             URLQueryItem(name: "apiKey", value: key),
             URLQueryItem(name: "regions", value: "us"),
             URLQueryItem(name: "markets", value: "h2h,spreads,totals"),
-            URLQueryItem(name: "bookmakers", value: preferredBooks.joined(separator: ",")),
             URLQueryItem(name: "oddsFormat", value: "american"),
             URLQueryItem(name: "dateFormat", value: "iso")
         ]
@@ -148,7 +196,11 @@ enum LiveOddsService {
         return await withTaskGroup(of: (SportFilter, [LiveMarketConsensus]?).self) { group in
             for sport in sports {
                 group.addTask {
-                    (sport, try? await fetchTeamConsensus(sport: sport, apiKey: key))
+                    (sport, try? await fetchTeamConsensus(
+                        sport: sport,
+                        apiKey: key,
+                        cacheMaxAge: 900
+                    ))
                 }
             }
             var output: [SportFilter: [LiveMarketConsensus]] = [:]
@@ -208,7 +260,6 @@ enum LiveOddsService {
             URLQueryItem(name: "apiKey", value: key),
             URLQueryItem(name: "regions", value: "us"),
             URLQueryItem(name: "markets", value: marketKey),
-            URLQueryItem(name: "bookmakers", value: preferredBooks.joined(separator: ",")),
             URLQueryItem(name: "oddsFormat", value: "american"),
             URLQueryItem(name: "dateFormat", value: "iso")
         ]
@@ -259,6 +310,7 @@ enum LiveOddsService {
             averageImpliedProbability: implied,
             bestOdds: bestRow.map { OddsMath.americanString($0.price) },
             bestBook: bestRow?.bookmaker,
+            eventStart: isoDate(event.commenceTime),
             bookCount: books.count,
             books: books,
             checkedAt: Date(),
@@ -307,6 +359,12 @@ enum LiveOddsService {
         request.setValue("SlipRadar/1.0", forHTTPHeaderField: "User-Agent")
         let (data, response) = try await URLSession.shared.data(for: request)
         guard let http = response as? HTTPURLResponse, (200...299).contains(http.statusCode) else { throw SlipRadarError.noData }
+
+        let remaining = Int(http.value(forHTTPHeaderField: "x-requests-remaining") ?? "")
+        let used = Int(http.value(forHTTPHeaderField: "x-requests-used") ?? "")
+        let last = Int(http.value(forHTTPHeaderField: "x-requests-last") ?? "")
+        await OddsUsageStore.shared.set(remaining: remaining, used: used, lastCost: last)
+
         return try JSONDecoder().decode(T.self, from: data)
     }
 
@@ -339,7 +397,8 @@ enum LiveOddsService {
                             price: outcome.price,
                             fairProbability: implied[index] / total * 100,
                             impliedProbability: implied[index],
-                            updated: updated
+                            updated: updated,
+                            commenceTime: isoDate(game.commenceTime)
                         ))
                     }
                 }
@@ -379,7 +438,8 @@ enum LiveOddsService {
                         price: target.price,
                         fairProbability: implied[index] / total * 100,
                         impliedProbability: implied[index],
-                        updated: updated
+                        updated: updated,
+                        commenceTime: isoDate(game.commenceTime)
                     ))
                 }
             }
@@ -407,6 +467,7 @@ enum LiveOddsService {
                 averageImpliedProbability: implied,
                 bestOdds: OddsMath.americanString(bestRow.price),
                 bestBook: bestRow.bookmaker,
+                commenceTime: group.compactMap(\.commenceTime).min(),
                 bookCount: books.count,
                 books: books,
                 lastUpdated: group.map(\.updated).max() ?? Date()
@@ -419,6 +480,7 @@ enum LiveOddsService {
             status: .unverified, event: prop.event, market: prop.market, player: prop.playerName,
             direction: prop.direction, requestedPoint: prop.threshold, livePoint: nil,
             fairProbability: nil, averageImpliedProbability: nil, bestOdds: nil, bestBook: nil,
+            eventStart: nil,
             bookCount: 0, books: [], checkedAt: Date(), note: note
         )
     }

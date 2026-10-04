@@ -5,6 +5,14 @@ struct MarketMovement {
     let supportPoints: Int
 }
 
+struct MarketHistoryPoint: Identifiable, Hashable {
+    let id: String
+    let timestamp: Date
+    let lineValue: Double?
+    let probability: Double?
+    let odds: String?
+}
+
 private struct MarketSnapshot: Codable {
     let key: String
     let timestamp: Date
@@ -64,6 +72,32 @@ enum MarketHistoryStore {
         movement(key: MarketKey.propHistoryKey(prop))
     }
 
+    static func history(for bet: PopularBet, limit: Int = 6) -> [MarketHistoryPoint] {
+        history(key: MarketKey.betHistoryKey(bet), limit: limit)
+    }
+
+    static func history(for prop: PropPick, limit: Int = 6) -> [MarketHistoryPoint] {
+        history(key: MarketKey.propHistoryKey(prop), limit: limit)
+    }
+
+    private static func history(key: String, limit: Int) -> [MarketHistoryPoint] {
+        let cutoff = Date().addingTimeInterval(-48 * 60 * 60)
+        return load()
+            .filter { $0.key == key && $0.timestamp >= cutoff }
+            .sorted { $0.timestamp < $1.timestamp }
+            .suffix(max(1, limit))
+            .enumerated()
+            .map { index, snapshot in
+                MarketHistoryPoint(
+                    id: "\(snapshot.key)|\(snapshot.timestamp.timeIntervalSince1970)|\(index)",
+                    timestamp: snapshot.timestamp,
+                    lineValue: snapshot.lineValue,
+                    probability: snapshot.probability,
+                    odds: snapshot.odds
+                )
+            }
+    }
+
     private static func movement(key: String) -> MarketMovement? {
         let cutoff = Date().addingTimeInterval(-48 * 60 * 60)
         let items = load()
@@ -111,7 +145,8 @@ enum MarketHistoryStore {
         guard let regex = try? NSRegularExpression(pattern: #"[-+]?\d+(?:\.\d+)?"#) else { return nil }
         let ns = text as NSString
         let range = NSRange(location: 0, length: ns.length)
-        guard let match = regex.firstMatch(in: text, range: range) else { return nil }
+        let matches = regex.matches(in: text, range: range)
+        guard let match = matches.last else { return nil }
         return Double(ns.substring(with: match.range))
     }
 

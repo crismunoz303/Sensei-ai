@@ -20,6 +20,7 @@ struct ContentView: View {
     @State private var liveTeamConsensus: [LiveMarketConsensus] = []
     @State private var liveTeamLoading = false
     @State private var liveTeamError: String?
+    @State private var oddsUsage: OddsUsageSnapshot?
 
     @State private var allLiveBySport: [SportFilter: [LiveMarketConsensus]] = [:]
     @State private var allBoard: [PopularBet] = []
@@ -33,8 +34,10 @@ struct ContentView: View {
 
     @State private var propProjections: [String: StatProjection] = [:]
     @State private var propProjectionLoading: Set<String> = []
+    @State private var propProjectionFailures: Set<String> = []
     @State private var propVerifications: [String: LivePropVerification] = [:]
     @State private var propVerificationLoading: Set<String> = []
+    @State private var autoVerifiedPropIDs: Set<String> = []
     @State private var propAvailability: [String: PlayerAvailabilitySnapshot] = [:]
 
     @State private var eventContextsBySport: [SportFilter: [EventContextSnapshot]] = [:]
@@ -101,6 +104,7 @@ struct ContentView: View {
                 report: DecisionEngine.report(
                     for: prop,
                     projection: propProjections[propKey(sport, prop)],
+                    matchupProjection: teamProjections[projectionKey(sport, prop.event)],
                     verification: propVerifications[propKey(sport, prop)],
                     contextText: contextText,
                     availability: propAvailability[propKey(sport, prop)],
@@ -235,6 +239,8 @@ struct ContentView: View {
         .onChange(of: selectedSection) { _, section in
             if section == .performance {
                 Task { await autoGradePending() }
+            } else if section == .props {
+                autoVerifyTopProps()
             }
         }
     }
@@ -389,7 +395,7 @@ struct ContentView: View {
                             .foregroundStyle(.white)
 
                         Text(!liveTeamConsensus.isEmpty
-                             ? "DraftKings • FanDuel • BetMGM • Caesars when available"
+                             ? "All available US books returned by the live provider • best price highlighted"
                              : liveTeamError ?? (liveConfigured ? "No current live outcomes returned." : "Add The Odds API key in Settings."))
                             .font(.system(size: 10))
                             .foregroundStyle(.white.opacity(0.5))
@@ -406,6 +412,12 @@ struct ContentView: View {
                 if selectedSport != .all {
                     statusChip("INJURIES", active: contextLoaded)
                 }
+            }
+
+            if let remaining = oddsUsage?.remaining {
+                Text("Live-odds API credits remaining: \(remaining)\(oddsUsage?.lastCost.map { " • last request cost \($0)" } ?? "")")
+                    .font(.system(size: 9, weight: .medium))
+                    .foregroundStyle(remaining < 75 ? .orange : .white.opacity(0.42))
             }
         }
         .padding(14)
@@ -633,7 +645,7 @@ struct ContentView: View {
                     .font(.system(size: 13, weight: .semibold))
                     .foregroundStyle(.white)
 
-                Text("\(propProjections.count) game-log projections • \(propVerifications.count) live checks • lineup Deep Check on demand")
+                Text("\(propProjections.count) game-log projections • \(propVerifications.count) live checks • top props auto-verified when quota is healthy")
                     .font(.system(size: 10))
                     .foregroundStyle(.white.opacity(0.5))
             }
@@ -654,6 +666,7 @@ struct ContentView: View {
             market: bet.market,
             selection: bet.side
         ))
+        let history = MarketHistoryStore.history(for: bet)
 
         return VStack(alignment: .leading, spacing: 10) {
             HStack {
@@ -684,6 +697,10 @@ struct ContentView: View {
                 Text("Best line: \(live.bestOdds) • \(live.bestBook) • \(live.bookCount) books")
                     .font(.system(size: 10, weight: .bold))
                     .foregroundStyle(.green.opacity(0.85))
+            }
+
+            if history.count >= 2 {
+                lineHistoryStrip(history)
             }
 
             confidenceBreakdown(report)
@@ -717,6 +734,7 @@ struct ContentView: View {
             market: prop.market,
             selection: prop.line
         ))
+        let history = MarketHistoryStore.history(for: prop)
 
         return VStack(alignment: .leading, spacing: 10) {
             HStack {
@@ -747,6 +765,10 @@ struct ContentView: View {
                 Text("Best line: \(odds)\(verification.bestBook.map { " • \($0)" } ?? "") • \(verification.bookCount) books")
                     .font(.system(size: 10, weight: .bold))
                     .foregroundStyle(.green.opacity(0.85))
+            }
+
+            if history.count >= 2 {
+                lineHistoryStrip(history)
             }
 
             confidenceBreakdown(report)
@@ -911,6 +933,7 @@ struct ContentView: View {
         let probabilities = slip.compactMap(\.probability)
         let combined = probabilities.isEmpty ? nil : probabilities.reduce(1.0) { $0 * ($1 / 100) } * 100
         let weakest = slip.min(by: { $0.evidenceScore < $1.evidenceScore })
+        let plannedUnits = slip.map(\.riskUnits).reduce(0, +)
 
         return VStack(alignment: .leading, spacing: 8) {
             HStack {
@@ -933,6 +956,20 @@ struct ContentView: View {
                 Text("Weakest leg: \(weakest.title) • \(weakest.signal) • evidence \(weakest.evidenceScore)")
                     .font(.system(size: 10, weight: .semibold))
                     .foregroundStyle(.orange)
+
+                if slip.count >= 2,
+                   let full = combined,
+                   let weakestProbability = weakest.probability,
+                   weakestProbability > 0 {
+                    let withoutWeakest = min(100, full / (weakestProbability / 100.0))
+                    Text(String(
+                        format: "Removing that leg changes the naive combined estimate from %.2f%% → %.2f%%.",
+                        full,
+                        withoutWeakest
+                    ))
+                    .font(.system(size: 9, weight: .medium))
+                    .foregroundStyle(.white.opacity(0.48))
+                }
             }
 
             ForEach(Array(slipWarnings.enumerated()), id: \.offset) { _, warning in
@@ -942,9 +979,15 @@ struct ContentView: View {
                     .fixedSize(horizontal: false, vertical: true)
             }
 
-            Text("Daily risk reminder: \(dailyRiskUnitsString) units max (local guardrail).")
-                .font(.system(size: 10))
-                .foregroundStyle(.white.opacity(0.45))
+            Text(String(format: "Planned risk: %.2f units • daily reminder: %@ units max.", plannedUnits, dailyRiskUnitsString))
+                .font(.system(size: 10, weight: plannedUnits > dailyRiskUnits ? .bold : .medium))
+                .foregroundStyle(plannedUnits > dailyRiskUnits ? .red : .white.opacity(0.45))
+
+            if plannedUnits > dailyRiskUnits {
+                Text("⚠️ Planned slip risk exceeds your local daily guardrail. SlipRadar does not raise stake size based on confidence.")
+                    .font(.system(size: 10, weight: .bold))
+                    .foregroundStyle(.red)
+            }
         }
         .padding(16)
         .background(Color.white.opacity(0.055), in: RoundedRectangle(cornerRadius: 16))
@@ -953,13 +996,16 @@ struct ContentView: View {
 
     private var slipWarnings: [String] {
         var warnings: [String] = []
+
         for i in slip.indices {
             for j in slip.indices where j > i {
                 let lhs = slip[i]
                 let rhs = slip[j]
+
                 if MarketKey.sameEvent(lhs.event, rhs.event) {
                     warnings.append("\(lhs.title) and \(rhs.title) share the same event; multiplied probabilities may be correlated.")
                 }
+
                 if MarketKey.sameEvent(lhs.event, rhs.event) &&
                     MarketKey.normalized(lhs.market) == MarketKey.normalized(rhs.market) &&
                     MarketKey.selectionBase(lhs.title) != MarketKey.selectionBase(rhs.title) {
@@ -967,6 +1013,22 @@ struct ContentView: View {
                 }
             }
         }
+
+        for leg in slip {
+            guard let sport = SportFilter(rawValue: leg.sport),
+                  let current = currentBestPrice(for: leg, sport: sport),
+                  let storedOdds = leg.odds,
+                  let oldValue = OddsMath.americanValue(from: storedOdds),
+                  let newValue = OddsMath.americanValue(from: current.odds),
+                  newValue > oldValue + 4 else {
+                continue
+            }
+
+            warnings.append(
+                "Better price now available for \(leg.title): \(current.odds) at \(current.book) vs saved \(storedOdds)\(leg.bestBook.map { " at \($0)" } ?? "")."
+            )
+        }
+
         return Array(Set(warnings)).sorted()
     }
 
@@ -1000,6 +1062,30 @@ struct ContentView: View {
                 }
                 .font(.system(size: 9, weight: .bold))
                 .foregroundStyle(.white.opacity(0.42))
+
+                HStack(spacing: 8) {
+                    Text("Risk units")
+                        .font(.system(size: 9, weight: .bold))
+                        .foregroundStyle(.white.opacity(0.45))
+
+                    Button {
+                        adjustRiskUnits(id: leg.id, delta: -0.25)
+                    } label: {
+                        Image(systemName: "minus.circle")
+                    }
+
+                    Text(String(format: "%.2f", leg.riskUnits))
+                        .font(.system(size: 10, weight: .black))
+                        .foregroundStyle(.white)
+                        .frame(width: 38)
+
+                    Button {
+                        adjustRiskUnits(id: leg.id, delta: 0.25)
+                    } label: {
+                        Image(systemName: "plus.circle")
+                    }
+                }
+                .foregroundStyle(.green)
             }
 
             Spacer()
@@ -1313,6 +1399,56 @@ struct ContentView: View {
         .background(Color.white.opacity(0.05), in: RoundedRectangle(cornerRadius: 15))
     }
 
+    private func lineHistoryStrip(_ history: [MarketHistoryPoint]) -> some View {
+        DisclosureGroup {
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 8) {
+                    ForEach(history) { point in
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(point.timestamp.formatted(date: .omitted, time: .shortened))
+                                .font(.system(size: 8, weight: .bold))
+                                .foregroundStyle(.white.opacity(0.42))
+
+                            if let line = point.lineValue {
+                                Text(String(format: "Line %.1f", line))
+                                    .font(.system(size: 9, weight: .black))
+                                    .foregroundStyle(.white)
+                            }
+
+                            if let odds = point.odds {
+                                Text(odds)
+                                    .font(.system(size: 9, weight: .bold))
+                                    .foregroundStyle(.green)
+                            }
+
+                            if let probability = point.probability {
+                                Text(String(format: "%.1f%% imp.", probability))
+                                    .font(.system(size: 8))
+                                    .foregroundStyle(.white.opacity(0.45))
+                            }
+                        }
+                        .padding(8)
+                        .background(Color.black.opacity(0.18), in: RoundedRectangle(cornerRadius: 9))
+                    }
+                }
+            }
+            .padding(.top, 6)
+        } label: {
+            Text("48H LINE HISTORY • \(history.count) snapshots")
+                .font(.system(size: 8, weight: .black))
+                .foregroundStyle(.white.opacity(0.48))
+        }
+        .tint(.white.opacity(0.45))
+        .padding(10)
+        .background(Color.white.opacity(0.03), in: RoundedRectangle(cornerRadius: 10))
+    }
+
+    private func adjustRiskUnits(id: String, delta: Double) {
+        guard let index = slip.firstIndex(where: { $0.id == id }) else { return }
+        slip[index].riskUnits = min(5.0, max(0.25, slip[index].riskUnits + delta))
+        SlipStore.save(slip)
+    }
+
     private var sourceHealthItems: [SourceHealthItem] {
         var items: [SourceHealthItem] = []
 
@@ -1337,6 +1473,18 @@ struct ContentView: View {
                 (liveError ?? "No live lines returned."),
             lastUpdated: lastUpdated
         ))
+
+        if liveConfigured {
+            items.append(SourceHealthItem(
+                id: "quota",
+                name: "Live-odds API quota",
+                state: (oddsUsage?.remaining ?? 9999) < 75 ? .limited : .healthy,
+                detail: oddsUsage.map {
+                    "Remaining \($0.remaining.map(String.init) ?? "unknown") • used \($0.used.map(String.init) ?? "unknown") • last call cost \($0.lastCost.map(String.init) ?? "unknown"). Persistent caching and on-demand prop checks protect the free quota."
+                } ?? "Connected; quota headers have not been observed yet.",
+                lastUpdated: oddsUsage?.updatedAt
+            ))
+        }
 
         let resolved = teamProjectionsForCurrentSport
         items.append(SourceHealthItem(
@@ -1376,6 +1524,22 @@ struct ContentView: View {
             state: contextLoadingSports.isEmpty ? (currentContextCount > 0 ? .healthy : .limited) : .loading,
             detail: "\(currentContextCount) current event contexts loaded; outdoor totals use weather only as a small modifier.",
             lastUpdated: lastUpdated
+        ))
+
+        items.append(SourceHealthItem(
+            id: "advanced-role",
+            name: "Advanced role / opponent feed",
+            state: .limited,
+            detail: "v1.0 uses verified game logs, event availability and team matchup environment. It will not invent proprietary usage, snap, target, handedness or position-vs-defense data when a trustworthy free feed is unavailable.",
+            lastUpdated: lastUpdated
+        ))
+
+        items.append(SourceHealthItem(
+            id: "historical-market",
+            name: "Historical market backtest",
+            state: .limited,
+            detail: "Recorded-history backtesting is real and forward-looking. Pre-install historical sportsbook snapshots require a paid historical odds feed, so SlipRadar does not fabricate them.",
+            lastUpdated: nil
         ))
 
         items.append(SourceHealthItem(
@@ -1624,6 +1788,11 @@ struct ContentView: View {
         return stored == 0 ? 4 : stored
     }
 
+    private var defaultRiskUnitsPerLeg: Double {
+        let stored = UserDefaults.standard.double(forKey: "SlipRadar.defaultUnitsPerLeg.v10")
+        return stored == 0 ? 1.0 : min(3.0, max(0.25, stored))
+    }
+
     private var dailyRiskUnits: Double {
         let stored = UserDefaults.standard.double(forKey: "SlipRadar.dailyRiskUnits.v10")
         return stored == 0 ? 3 : stored
@@ -1668,6 +1837,41 @@ struct ContentView: View {
         return sport == selectedSport ? liveTeamConsensus : []
     }
 
+    private func currentBestPrice(
+        for leg: SlipLeg,
+        sport: SportFilter
+    ) -> (odds: String, book: String)? {
+        let live = liveConsensus(for: sport)
+
+        let candidate = live
+            .filter {
+                MarketKey.sameEvent($0.event, leg.event) &&
+                MarketKey.normalized($0.market) == MarketKey.normalized(leg.market)
+            }
+            .map { consensus -> (LiveMarketConsensus, Double) in
+                let a = Set(MarketKey.selectionBase(leg.title).split(separator: " ").map(String.init))
+                let b = Set(MarketKey.selectionBase(consensus.outcome).split(separator: " ").map(String.init))
+                let selectionScore: Double = {
+                    guard !a.isEmpty, !b.isEmpty else { return 0 }
+                    return Double(a.intersection(b).count) / Double(min(a.count, b.count))
+                }()
+
+                let legPoint = LiveOddsService.numericPoint(leg.title)
+                let pointScore: Double = {
+                    guard let legPoint, let point = consensus.point else {
+                        return legPoint == nil && consensus.point == nil ? 0.2 : 0
+                    }
+                    return abs(legPoint - point) < 0.001 ? 0.5 : 0
+                }()
+
+                return (consensus, selectionScore + pointScore)
+            }
+            .max(by: { $0.1 < $1.1 })
+
+        guard let candidate, candidate.1 >= 0.45 else { return nil }
+        return (candidate.0.bestOdds, candidate.0.bestBook)
+    }
+
     private func betSlipID(_ sport: SportFilter, _ bet: PopularBet) -> String {
         [sport.rawValue, bet.source.rawValue, bet.matchup, bet.market, bet.side].joined(separator: "|")
     }
@@ -1705,6 +1909,7 @@ struct ContentView: View {
             threshold: nil,
             direction: nil,
             modelVersion: ModelVersion.current,
+            riskUnits: defaultRiskUnitsPerLeg,
             addedAt: Date()
         )
 
@@ -1747,6 +1952,7 @@ struct ContentView: View {
             threshold: prop.threshold,
             direction: prop.direction,
             modelVersion: ModelVersion.current,
+            riskUnits: defaultRiskUnitsPerLeg,
             addedAt: Date()
         )
 
@@ -1829,8 +2035,10 @@ struct ContentView: View {
 
         propProjections = [:]
         propProjectionLoading = []
+        propProjectionFailures = []
         propVerifications = [:]
         propVerificationLoading = []
+        autoVerifiedPropIDs = []
         propAvailability = [:]
 
         eventContextsBySport = [:]
@@ -1865,6 +2073,7 @@ struct ContentView: View {
             Task {
                 do {
                     let boards = try await LiveOddsService.fetchAllActiveTeamBoards(apiKey: key)
+                    let usage = await LiveOddsService.usageSnapshot()
                     let bets = boards.flatMap { sport, consensus in
                         LiveOddsService.makeBets(from: consensus, sport: sport)
                     }
@@ -1872,6 +2081,7 @@ struct ContentView: View {
                     await MainActor.run {
                         allLiveBySport = boards
                         allBoard = bets
+                        oddsUsage = usage
                         allBoardLoading = false
                         lastUpdated = Date()
 
@@ -1897,9 +2107,11 @@ struct ContentView: View {
             Task {
                 do {
                     let result = try await LiveOddsService.fetchTeamConsensus(sport: sport, apiKey: key)
+                    let usage = await LiveOddsService.usageSnapshot()
                     await MainActor.run {
                         if selectedSport == sport {
                             liveTeamConsensus = result
+                            oddsUsage = usage
                             liveTeamLoading = false
                             lastUpdated = Date()
                             refreshTrackedMarkets()
@@ -1999,12 +2211,15 @@ struct ContentView: View {
                 let sport = bet.sport ?? selectedSport
                 guard sport != .all, sport != .soccer else { return nil }
                 let key = projectionKey(sport, bet.matchup)
-                guard teamProjections[key] == nil, !teamProjectionLoading.contains(key) else { return nil }
+                let failureKey = "\(sport.rawValue) • \(bet.matchup)"
+                guard teamProjections[key] == nil,
+                      !teamProjectionLoading.contains(key),
+                      teamModelFailures[failureKey] == nil else { return nil }
                 return (sport, bet.matchup)
             }
         }()
 
-        let limit = selectedSport == .all ? 36 : 14
+        let limit = selectedSport == .all ? 16 : 12
         let work = Array(candidates.prefix(limit))
         guard !work.isEmpty else { return }
 
@@ -2040,6 +2255,7 @@ struct ContentView: View {
 
             await MainActor.run {
                 updateTrackingAndWatchlist()
+                scheduleTeamProjectionLoad()
             }
         }
     }
@@ -2047,17 +2263,20 @@ struct ContentView: View {
     private func schedulePropProjectionLoad(_ parsed: [PropPick], sport: SportFilter) {
         guard sport.supportsPlayerGameLogs else { return }
 
-        let candidates = Array(parsed.prefix(24)).filter { prop in
+        let candidates = parsed.filter { prop in
             let key = propKey(sport, prop)
-            return propProjections[key] == nil && !propProjectionLoading.contains(key)
+            return propProjections[key] == nil &&
+                !propProjectionLoading.contains(key) &&
+                !propProjectionFailures.contains(key)
         }
-        guard !candidates.isEmpty else { return }
+        let work = Array(candidates.prefix(16))
+        guard !work.isEmpty else { return }
 
-        candidates.forEach { propProjectionLoading.insert(propKey(sport, $0)) }
+        work.forEach { propProjectionLoading.insert(propKey(sport, $0)) }
 
         Task {
             await withTaskGroup(of: (String, StatProjection?).self) { group in
-                for prop in candidates {
+                for prop in work {
                     group.addTask {
                         let projection = await StatProjectionService.playerProjection(for: prop, sport: sport)
                         return (propKey(sport, prop), projection)
@@ -2069,6 +2288,51 @@ struct ContentView: View {
                         propProjectionLoading.remove(key)
                         if let projection {
                             propProjections[key] = projection
+                        } else {
+                            propProjectionFailures.insert(key)
+                        }
+                    }
+                }
+            }
+
+            // Free ESPN-based context: automatically validate availability for this
+            // batch instead of making the user Deep Check every card.
+            let contextCandidates = Array(work.prefix(10))
+            await withTaskGroup(of: (String, PlayerAvailabilitySnapshot).self) { group in
+                for prop in contextCandidates where !prop.playerName.isEmpty {
+                    group.addTask {
+                        let availability = await EventContextService.playerAvailability(
+                            playerName: prop.playerName,
+                            event: prop.event,
+                            sport: sport
+                        )
+                        return (propKey(sport, prop), availability)
+                    }
+                }
+
+                for await (key, availability) in group {
+                    await MainActor.run {
+                        propAvailability[key] = availability
+                    }
+                }
+            }
+
+            // Load the event-level matchup environment once per prop event.
+            let events = Array(Set(contextCandidates.map(\.event))).prefix(8)
+            await withTaskGroup(of: (String, TeamProjection?).self) { group in
+                for event in events {
+                    let key = projectionKey(sport, event)
+                    if teamProjections[key] == nil {
+                        group.addTask {
+                            (key, await StatProjectionService.teamProjection(for: event, sport: sport))
+                        }
+                    }
+                }
+
+                for await (key, projection) in group {
+                    await MainActor.run {
+                        if let projection {
+                            teamProjections[key] = projection
                         }
                     }
                 }
@@ -2076,7 +2340,40 @@ struct ContentView: View {
 
             await MainActor.run {
                 updateTrackingAndWatchlist()
+                autoVerifyTopProps()
+                schedulePropProjectionLoad(parsed, sport: sport)
             }
+        }
+    }
+
+    private func autoVerifyTopProps() {
+        guard selectedSection == .props,
+              selectedSport != .all,
+              liveConfigured,
+              (oddsUsage?.remaining ?? 9999) >= 40 else {
+            return
+        }
+
+        let candidates = scoredProps
+            .filter { item in
+                let key = propKey(item.sport, item.prop)
+                return item.sport == selectedSport &&
+                    item.report.modelProbability != nil &&
+                    propVerifications[key] == nil &&
+                    !propVerificationLoading.contains(key) &&
+                    !autoVerifiedPropIDs.contains(key)
+            }
+            .sorted { lhs, rhs in
+                let lp = lhs.report.modelProbability ?? 0
+                let rp = rhs.report.modelProbability ?? 0
+                if abs(lp - rp) > 0.01 { return lp > rp }
+                return lhs.report.evidenceScore > rhs.report.evidenceScore
+            }
+
+        for item in candidates.prefix(3) {
+            let key = propKey(item.sport, item.prop)
+            autoVerifiedPropIDs.insert(key)
+            deepCheck(item)
         }
     }
 
@@ -2112,8 +2409,10 @@ struct ContentView: View {
             }
 
             let availability = await availabilityTask
+            let usage = await LiveOddsService.usageSnapshot()
 
             await MainActor.run {
+                oddsUsage = usage
                 if let projection {
                     propProjections[key] = projection
                 }
@@ -2121,16 +2420,19 @@ struct ContentView: View {
 
                 if let verification {
                     propVerifications[key] = verification
-                    PerformanceStore.updateLatestMatching(
-                        sport: sport,
-                        event: prop.event,
-                        market: prop.market,
-                        title: prop.line,
-                        odds: verification.bestOdds,
-                        book: verification.bestBook,
-                        fairProbability: verification.fairProbability,
-                        observedAt: verification.checkedAt
-                    )
+
+                    if verification.eventStart == nil || verification.checkedAt <= verification.eventStart! {
+                        PerformanceStore.updateLatestMatching(
+                            sport: sport,
+                            event: prop.event,
+                            market: prop.market,
+                            title: prop.line,
+                            odds: verification.bestOdds,
+                            book: verification.bestBook,
+                            fairProbability: verification.fairProbability,
+                            observedAt: verification.checkedAt
+                        )
+                    }
                 }
 
                 propVerificationLoading.remove(key)
@@ -2160,6 +2462,11 @@ struct ContentView: View {
     private func refreshTrackedMarkets() {
         for item in scoredBets {
             let live = LiveOddsService.matchConsensus(for: item.bet, in: liveConsensus(for: item.sport))
+
+            if let start = live?.commenceTime, Date() > start {
+                continue
+            }
+
             PerformanceStore.updateLatestMatching(
                 sport: item.sport,
                 event: item.bet.matchup,
@@ -2180,8 +2487,9 @@ struct ContentView: View {
         for item in scoredBets {
             let live = LiveOddsService.matchConsensus(for: item.bet, in: liveConsensus(for: item.sport))
 
-            PerformanceStore.trackRecommendation(
-                sport: item.sport,
+            if live?.commenceTime == nil || Date() <= live!.commenceTime! {
+                PerformanceStore.trackRecommendation(
+                    sport: item.sport,
                 title: item.bet.side,
                 event: item.bet.matchup,
                 market: item.bet.market,
@@ -2196,7 +2504,8 @@ struct ContentView: View {
                 playerName: nil,
                 threshold: nil,
                 direction: nil
-            )
+                )
+            }
 
             alerts.append(contentsOf: WatchlistStore.update(
                 bet: item.bet,
@@ -2209,9 +2518,10 @@ struct ContentView: View {
         for item in scoredProps {
             let verification = propVerifications[propKey(item.sport, item.prop)]
 
-            PerformanceStore.trackRecommendation(
-                sport: item.sport,
-                title: item.prop.line,
+            if verification?.eventStart == nil || Date() <= verification!.eventStart! {
+                PerformanceStore.trackRecommendation(
+                    sport: item.sport,
+                    title: item.prop.line,
                 event: item.prop.event,
                 market: item.prop.market,
                 source: item.prop.source,
@@ -2225,7 +2535,8 @@ struct ContentView: View {
                 playerName: item.prop.playerName.isEmpty ? nil : item.prop.playerName,
                 threshold: item.prop.threshold,
                 direction: item.prop.direction
-            )
+                )
+            }
 
             alerts.append(contentsOf: WatchlistStore.update(
                 prop: item.prop,
