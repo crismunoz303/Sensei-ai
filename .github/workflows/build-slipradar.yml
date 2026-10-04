@@ -1,0 +1,52 @@
+name: Build SlipRadar unsigned IPA
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - slipradar-v0.1
+    paths:
+      - 'SlipRadarApp/**'
+      - '.github/workflows/build-slipradar.yml'
+
+jobs:
+  build:
+    runs-on: macos-15
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install XcodeGen
+        run: brew install xcodegen
+
+      - name: Generate Xcode project
+        working-directory: SlipRadarApp
+        run: xcodegen generate
+
+      - name: Build unsigned app
+        working-directory: SlipRadarApp
+        run: |
+          xcodebuild \
+            -project SlipRadar.xcodeproj \
+            -scheme SlipRadar \
+            -configuration Release \
+            -sdk iphoneos \
+            -derivedDataPath build \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_IDENTITY="" \
+            clean build
+
+      - name: Package IPA
+        working-directory: SlipRadarApp
+        run: |
+          mkdir -p Payload
+          cp -R build/Build/Products/Release-iphoneos/SlipRadar.app Payload/
+          /usr/bin/zip -qry SlipRadar-v0.1-unsigned.ipa Payload
+
+      - name: Upload IPA
+        uses: actions/upload-artifact@v4
+        with:
+          name: SlipRadar-v0.1-unsigned-ipa
+          path: SlipRadarApp/SlipRadar-v0.1-unsigned.ipa
