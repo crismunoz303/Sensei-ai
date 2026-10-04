@@ -124,7 +124,6 @@ enum SportFilter: String, CaseIterable, Identifiable {
         }
         var components = URLComponents(string: base)!
         components.queryItems = [
-            URLQueryItem(name: "tb_edate", value: "n7days"),
             URLQueryItem(name: "tb_eg", value: group)
         ]
         return components.url!
@@ -146,7 +145,6 @@ enum SportFilter: String, CaseIterable, Identifiable {
         }
         var components = URLComponents(string: base)!
         components.queryItems = [
-            URLQueryItem(name: "tb_edate", value: "n7days"),
             URLQueryItem(name: "tb_eg", value: group)
         ]
         return components.url!
@@ -167,6 +165,7 @@ enum SlipRadarError: LocalizedError {
 
 enum AppSection: String, CaseIterable, Identifiable {
     case locks = "Locks"
+    case teams = "Teams"
     case props = "Props"
     case slip = "My Slip"
 
