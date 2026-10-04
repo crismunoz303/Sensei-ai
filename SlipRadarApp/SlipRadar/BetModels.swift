@@ -108,3 +108,47 @@ enum SlipRadarError: LocalizedError {
         }
     }
 }
+
+
+enum AppSection: String, CaseIterable, Identifiable {
+    case locks = "Locks"
+    case props = "Props"
+    case slip = "My Slip"
+    var id: String { rawValue }
+}
+
+struct PropPick: Identifiable, Hashable {
+    let event: String
+    let eventDate: String
+    let market: String
+    let line: String
+    let odds: String
+    let source: String
+    let isLock: Bool
+    let handlePercent: Double?
+    let betPercent: Double?
+
+    var id: String {
+        [event, market, line, odds].joined(separator: "|")
+    }
+
+    var signalLabel: String {
+        isLock ? "LOCK" : "POPULAR"
+    }
+
+    var reasonText: String {
+        if let handlePercent, let betPercent {
+            let diff = handlePercent - betPercent
+            return String(format: "%.1f%% handle / %.1f%% bets (%+.1f%%)", handlePercent, betPercent, diff)
+        }
+        return "Popular public prop"
+    }
+}
+
+struct SlipLeg: Identifiable, Hashable {
+    let id: String
+    let title: String
+    let subtitle: String
+    let source: String
+    let signal: String
+}
