@@ -41,9 +41,21 @@ jobs:
       - name: Package IPA
         working-directory: SlipRadarApp
         run: |
+          rm -rf Payload SlipRadar-v0.5-probability-unsigned.ipa
           mkdir -p Payload
           cp -R build/Build/Products/Release-iphoneos/SlipRadar.app Payload/
-          /usr/bin/zip -qry SlipRadar-v0.5-probability-unsigned.ipa Payload
+
+          # Produce a clean unsigned payload for third-party iOS signers.
+          rm -rf Payload/SlipRadar.app/_CodeSignature
+          rm -f Payload/SlipRadar.app/embedded.mobileprovision
+          xattr -cr Payload/SlipRadar.app || true
+
+          plutil -lint Payload/SlipRadar.app/Info.plist
+          test -x Payload/SlipRadar.app/SlipRadar
+
+          # -X strips ZIP extra fields that can confuse some IPA re-signers.
+          /usr/bin/zip -X -qry SlipRadar-v0.5-probability-unsigned.ipa Payload
+          unzip -t SlipRadar-v0.5-probability-unsigned.ipa
 
       - name: Upload IPA
         uses: actions/upload-artifact@v4
