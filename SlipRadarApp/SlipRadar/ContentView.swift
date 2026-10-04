@@ -47,6 +47,7 @@ struct ContentView: View {
     @State private var performanceToken = UUID()
     @State private var watchToken = UUID()
     @State private var autoGrading = false
+    @State private var trackingUpdateScheduled = false
 
     private var publicBoard: [PopularBet] {
         resultsBySource.values.flatMap { $0 }
@@ -260,7 +261,7 @@ struct ContentView: View {
                     .font(.system(size: 27, weight: .black, design: .rounded))
                     .foregroundStyle(.white)
 
-                Text("FULL MODEL • v1.0 • \(ModelVersion.current)")
+                Text("FULL MODEL • v1.0.1 • \(ModelVersion.current)")
                     .font(.system(size: 10, weight: .bold, design: .rounded))
                     .tracking(1.0)
                     .foregroundStyle(Color.green)
@@ -2087,8 +2088,7 @@ struct ContentView: View {
 
                         scheduleTeamProjectionLoad()
                         loadEventContexts(for: Array(boards.keys))
-                        refreshTrackedMarkets()
-                        updateTrackingAndWatchlist()
+                        scheduleDeferredTracking()
                     }
                 } catch {
                     await MainActor.run {
@@ -2114,8 +2114,7 @@ struct ContentView: View {
                             oddsUsage = usage
                             liveTeamLoading = false
                             lastUpdated = Date()
-                            refreshTrackedMarkets()
-                            updateTrackingAndWatchlist()
+                            scheduleDeferredTracking()
                         }
                     }
                 } catch {
@@ -2219,9 +2218,12 @@ struct ContentView: View {
             }
         }()
 
-        let limit = selectedSport == .all ? 16 : 12
+        let limit = selectedSport == .all ? 6 : 6
         let work = Array(candidates.prefix(limit))
-        guard !work.isEmpty else { return }
+        guard !work.isEmpty else {
+            scheduleDeferredTracking()
+            return
+        }
 
         for (sport, matchup) in work {
             teamProjectionLoading.insert(projectionKey(sport, matchup))
@@ -2253,8 +2255,8 @@ struct ContentView: View {
                 }
             }
 
+            try? await Task.sleep(nanoseconds: 120_000_000)
             await MainActor.run {
-                updateTrackingAndWatchlist()
                 scheduleTeamProjectionLoad()
             }
         }
@@ -2269,8 +2271,11 @@ struct ContentView: View {
                 !propProjectionLoading.contains(key) &&
                 !propProjectionFailures.contains(key)
         }
-        let work = Array(candidates.prefix(16))
-        guard !work.isEmpty else { return }
+        let work = Array(candidates.prefix(6))
+        guard !work.isEmpty else {
+            scheduleDeferredTracking()
+            return
+        }
 
         work.forEach { propProjectionLoading.insert(propKey(sport, $0)) }
 
@@ -2297,7 +2302,7 @@ struct ContentView: View {
 
             // Free ESPN-based context: automatically validate availability for this
             // batch instead of making the user Deep Check every card.
-            let contextCandidates = Array(work.prefix(10))
+            let contextCandidates = Array(work.prefix(4))
             await withTaskGroup(of: (String, PlayerAvailabilitySnapshot).self) { group in
                 for prop in contextCandidates where !prop.playerName.isEmpty {
                     group.addTask {
@@ -2318,7 +2323,7 @@ struct ContentView: View {
             }
 
             // Load the event-level matchup environment once per prop event.
-            let events = Array(Set(contextCandidates.map(\.event))).prefix(8)
+            let events = Array(Set(contextCandidates.map(\.event))).prefix(4)
             await withTaskGroup(of: (String, TeamProjection?).self) { group in
                 for event in events {
                     let key = projectionKey(sport, event)
@@ -2338,8 +2343,8 @@ struct ContentView: View {
                 }
             }
 
+            try? await Task.sleep(nanoseconds: 120_000_000)
             await MainActor.run {
-                updateTrackingAndWatchlist()
                 autoVerifyTopProps()
                 schedulePropProjectionLoad(parsed, sport: sport)
             }
@@ -2437,7 +2442,7 @@ struct ContentView: View {
 
                 propVerificationLoading.remove(key)
                 performanceToken = UUID()
-                updateTrackingAndWatchlist()
+                scheduleDeferredTracking()
             }
         }
     }
@@ -2460,12 +2465,24 @@ struct ContentView: View {
     }
 
     private func refreshTrackedMarkets() {
-        for item in scoredBets {
-            let live = LiveOddsService.matchConsensus(for: item.bet, in: liveConsensus(for: item.sport))
+        let tracked = PerformanceStore.load().filter { $0.outcome == .pending }
+        guard !tracked.isEmpty else { return }
 
-            if let start = live?.commenceTime, Date() > start {
+        let current = scoredBets
+        for pick in tracked {
+            guard let sportName = pick.sport,
+                  let sport = SportFilter(rawValue: sportName),
+                  let item = current.first(where: {
+                      $0.sport == sport &&
+                      MarketKey.sameEvent($0.bet.matchup, pick.event) &&
+                      MarketKey.normalized($0.bet.market) == MarketKey.normalized(pick.market) &&
+                      MarketKey.sameSelection($0.bet.side, pick.title)
+                  }) else {
                 continue
             }
+
+            let live = LiveOddsService.matchConsensus(for: item.bet, in: liveConsensus(for: item.sport))
+            if let start = live?.commenceTime, Date() > start { continue }
 
             PerformanceStore.updateLatestMatching(
                 sport: item.sport,
@@ -2478,73 +2495,103 @@ struct ContentView: View {
                 observedAt: live?.lastUpdated ?? Date()
             )
         }
+
         performanceToken = UUID()
     }
 
     private func updateTrackingAndWatchlist() {
+        let teamItems = scoredBets
+        let propItems = scoredProps
+        let watchedIDs = Set(WatchlistStore.load().map(\.id))
         var alerts: [WatchAlert] = []
 
-        for item in scoredBets {
+        // Automatic performance tracking only needs qualified recommendations.
+        for item in teamItems where item.report.verdict == .lock || item.report.verdict == .strong {
             let live = LiveOddsService.matchConsensus(for: item.bet, in: liveConsensus(for: item.sport))
 
             if live?.commenceTime == nil || Date() <= live!.commenceTime! {
                 PerformanceStore.trackRecommendation(
                     sport: item.sport,
-                title: item.bet.side,
-                event: item.bet.matchup,
-                market: item.bet.market,
-                source: item.bet.source.rawValue,
-                odds: live?.bestOdds ?? item.bet.odds,
-                bestBook: live?.bestBook,
-                modelProbability: item.report.modelProbability,
-                marketProbability: item.report.fairProbability,
-                edge: item.report.estimatedEdge,
-                evidenceScore: item.report.evidenceScore,
-                verdict: item.report.verdict,
-                playerName: nil,
-                threshold: nil,
-                direction: nil
+                    title: item.bet.side,
+                    event: item.bet.matchup,
+                    market: item.bet.market,
+                    source: item.bet.source.rawValue,
+                    odds: live?.bestOdds ?? item.bet.odds,
+                    bestBook: live?.bestBook,
+                    modelProbability: item.report.modelProbability,
+                    marketProbability: item.report.fairProbability,
+                    edge: item.report.estimatedEdge,
+                    evidenceScore: item.report.evidenceScore,
+                    verdict: item.report.verdict,
+                    playerName: nil,
+                    threshold: nil,
+                    direction: nil
                 )
             }
-
-            alerts.append(contentsOf: WatchlistStore.update(
-                bet: item.bet,
-                sport: item.sport,
-                report: item.report,
-                bestBook: live?.bestBook
-            ))
         }
 
-        for item in scoredProps {
+        for item in propItems where item.report.verdict == .lock || item.report.verdict == .strong {
             let verification = propVerifications[propKey(item.sport, item.prop)]
 
             if verification?.eventStart == nil || Date() <= verification!.eventStart! {
                 PerformanceStore.trackRecommendation(
                     sport: item.sport,
                     title: item.prop.line,
-                event: item.prop.event,
-                market: item.prop.market,
-                source: item.prop.source,
-                odds: verification?.bestOdds ?? item.prop.odds,
-                bestBook: verification?.bestBook,
-                modelProbability: item.report.modelProbability,
-                marketProbability: item.report.fairProbability,
-                edge: item.report.estimatedEdge,
-                evidenceScore: item.report.evidenceScore,
-                verdict: item.report.verdict,
-                playerName: item.prop.playerName.isEmpty ? nil : item.prop.playerName,
-                threshold: item.prop.threshold,
-                direction: item.prop.direction
+                    event: item.prop.event,
+                    market: item.prop.market,
+                    source: item.prop.source,
+                    odds: verification?.bestOdds ?? item.prop.odds,
+                    bestBook: verification?.bestBook,
+                    modelProbability: item.report.modelProbability,
+                    marketProbability: item.report.fairProbability,
+                    edge: item.report.estimatedEdge,
+                    evidenceScore: item.report.evidenceScore,
+                    verdict: item.report.verdict,
+                    playerName: item.prop.playerName.isEmpty ? nil : item.prop.playerName,
+                    threshold: item.prop.threshold,
+                    direction: item.prop.direction
                 )
             }
+        }
 
-            alerts.append(contentsOf: WatchlistStore.update(
-                prop: item.prop,
-                sport: item.sport,
-                report: item.report,
-                bestOdds: verification?.bestOdds,
-                bestBook: verification?.bestBook
-            ))
+        // Do not scan/update the watchlist for hundreds of non-watched lines.
+        if !watchedIDs.isEmpty {
+            for item in teamItems {
+                let watchID = WatchlistStore.watchID(
+                    sport: item.sport,
+                    event: item.bet.matchup,
+                    market: item.bet.market,
+                    selection: item.bet.side
+                )
+                guard watchedIDs.contains(watchID) else { continue }
+
+                let live = LiveOddsService.matchConsensus(for: item.bet, in: liveConsensus(for: item.sport))
+                alerts.append(contentsOf: WatchlistStore.update(
+                    bet: item.bet,
+                    sport: item.sport,
+                    report: item.report,
+                    bestBook: live?.bestBook
+                ))
+            }
+
+            for item in propItems {
+                let watchID = WatchlistStore.watchID(
+                    sport: item.sport,
+                    event: item.prop.event,
+                    market: item.prop.market,
+                    selection: item.prop.line
+                )
+                guard watchedIDs.contains(watchID) else { continue }
+
+                let verification = propVerifications[propKey(item.sport, item.prop)]
+                alerts.append(contentsOf: WatchlistStore.update(
+                    prop: item.prop,
+                    sport: item.sport,
+                    report: item.report,
+                    bestOdds: verification?.bestOdds,
+                    bestBook: verification?.bestBook
+                ))
+            }
         }
 
         if !alerts.isEmpty {
@@ -2553,6 +2600,20 @@ struct ContentView: View {
 
         performanceToken = UUID()
         watchToken = UUID()
+    }
+
+    private func scheduleDeferredTracking() {
+        guard !trackingUpdateScheduled else { return }
+        trackingUpdateScheduled = true
+
+        Task {
+            try? await Task.sleep(nanoseconds: 500_000_000)
+            await MainActor.run {
+                trackingUpdateScheduled = false
+                refreshTrackedMarkets()
+                updateTrackingAndWatchlist()
+            }
+        }
     }
 
     @MainActor

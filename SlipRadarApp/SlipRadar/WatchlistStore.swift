@@ -3,13 +3,22 @@ import UserNotifications
 
 enum WatchlistStore {
     private static let storageKey = "SlipRadar.watchlist.v10"
+    private static var memoryCache: [WatchItem]?
 
     static func load() -> [WatchItem] {
+        if let cached = memoryCache {
+            return cached
+        }
+
         guard let data = UserDefaults.standard.data(forKey: storageKey),
               let decoded = try? JSONDecoder().decode([WatchItem].self, from: data) else {
+            memoryCache = []
             return []
         }
-        return decoded.sorted { $0.createdAt > $1.createdAt }
+
+        let sorted = decoded.sorted { $0.createdAt > $1.createdAt }
+        memoryCache = sorted
+        return sorted
     }
 
     static func contains(id: String) -> Bool {
@@ -133,7 +142,9 @@ enum WatchlistStore {
     }
 
     private static func save(_ items: [WatchItem]) {
-        guard let data = try? JSONEncoder().encode(items) else { return }
+        let sorted = items.sorted { $0.createdAt > $1.createdAt }
+        memoryCache = sorted
+        guard let data = try? JSONEncoder().encode(sorted) else { return }
         UserDefaults.standard.set(data, forKey: storageKey)
     }
 }

@@ -27,38 +27,24 @@ jobs:
       - name: Build unsigned app
         working-directory: SlipRadarApp
         run: |
-          xcodebuild \
-            -project SlipRadar.xcodeproj \
-            -scheme SlipRadar \
-            -configuration Release \
-            -sdk iphoneos \
-            -derivedDataPath build \
-            CODE_SIGNING_ALLOWED=NO \
-            CODE_SIGNING_REQUIRED=NO \
-            CODE_SIGN_IDENTITY="" \
-            clean build
+          xcodebuild             -project SlipRadar.xcodeproj             -scheme SlipRadar             -configuration Release             -sdk iphoneos             -derivedDataPath build             CODE_SIGNING_ALLOWED=NO             CODE_SIGNING_REQUIRED=NO             CODE_SIGN_IDENTITY=""             clean build
 
       - name: Package IPA
         working-directory: SlipRadarApp
         run: |
-          rm -rf Payload SlipRadar-v1.0-complete-full-model-unsigned.ipa
+          rm -rf Payload SlipRadar-v1.0.1-ui-hotfix-unsigned.ipa
           mkdir -p Payload
           cp -R build/Build/Products/Release-iphoneos/SlipRadar.app Payload/
-
-          # Produce a clean unsigned payload for third-party iOS signers.
           rm -rf Payload/SlipRadar.app/_CodeSignature
           rm -f Payload/SlipRadar.app/embedded.mobileprovision
           xattr -cr Payload/SlipRadar.app || true
-
           plutil -lint Payload/SlipRadar.app/Info.plist
           test -x Payload/SlipRadar.app/SlipRadar
-
-          # -X strips ZIP extra fields that can confuse some IPA re-signers.
-          /usr/bin/zip -X -qry SlipRadar-v1.0-complete-full-model-unsigned.ipa Payload
-          unzip -t SlipRadar-v1.0-complete-full-model-unsigned.ipa
+          /usr/bin/zip -X -qry SlipRadar-v1.0.1-ui-hotfix-unsigned.ipa Payload
+          unzip -t SlipRadar-v1.0.1-ui-hotfix-unsigned.ipa
 
       - name: Upload IPA
         uses: actions/upload-artifact@v4
         with:
-          name: SlipRadar-v1.0-complete-full-model-unsigned-ipa
-          path: SlipRadarApp/SlipRadar-v1.0-complete-full-model-unsigned.ipa
+          name: SlipRadar-v1.0.1-ui-hotfix-unsigned-ipa
+          path: SlipRadarApp/SlipRadar-v1.0.1-ui-hotfix-unsigned.ipa

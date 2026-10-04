@@ -77,6 +77,7 @@ enum SlipStore {
 enum PerformanceStore {
     private static let storageKey = "SlipRadar.performance.v10"
     private static let legacyKeys = ["SlipRadar.performance.v09", "SlipRadar.performance.v08"]
+    private static var memoryCache: [TrackedPick]?
 
     static func track(_ leg: SlipLeg, origin: String = "SLIP") {
         var picks = load()
@@ -237,18 +238,27 @@ enum PerformanceStore {
     }
 
     static func load() -> [TrackedPick] {
+        if let cached = memoryCache {
+            return cached
+        }
+
         if let data = UserDefaults.standard.data(forKey: storageKey),
            let decoded = try? JSONDecoder().decode([TrackedPick].self, from: data) {
-            return decoded.sorted { $0.addedAt > $1.addedAt }
+            let sorted = decoded.sorted { $0.addedAt > $1.addedAt }
+            memoryCache = sorted
+            return sorted
         }
 
         for key in legacyKeys {
             if let data = UserDefaults.standard.data(forKey: key),
                let decoded = try? JSONDecoder().decode([TrackedPick].self, from: data) {
-                save(decoded)
-                return decoded.sorted { $0.addedAt > $1.addedAt }
+                let sorted = decoded.sorted { $0.addedAt > $1.addedAt }
+                save(sorted)
+                return sorted
             }
         }
+
+        memoryCache = []
         return []
     }
 
@@ -451,7 +461,9 @@ enum PerformanceStore {
     }
 
     private static func save(_ picks: [TrackedPick]) {
-        guard let data = try? JSONEncoder().encode(picks) else { return }
+        let sorted = picks.sorted { $0.addedAt > $1.addedAt }
+        memoryCache = sorted
+        guard let data = try? JSONEncoder().encode(sorted) else { return }
         UserDefaults.standard.set(data, forKey: storageKey)
     }
 }
