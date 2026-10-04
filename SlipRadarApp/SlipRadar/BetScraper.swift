@@ -251,3 +251,76 @@ enum BetTextParser {
         return grouped.values.compactMap { $0.first }
     }
 }
+
+
+enum PropTextParser {
+    static func parse(_ text: String) -> [PropPick] {
+        let lines = text
+            .components(separatedBy: .newlines)
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+
+        var props: [PropPick] = []
+        var i = 0
+
+        while i < lines.count {
+            let event = lines[i]
+            guard event.contains(" @ ") || event.contains(" vs ") else {
+                i += 1
+                continue
+            }
+
+            var cursor = i + 1
+            var eventDate = "Today"
+            var market = ""
+            var line = ""
+            var odds = ""
+
+            if cursor < lines.count {
+                let candidate = lines[cursor]
+                if candidate.contains("/") || candidate.uppercased().contains("AM") || candidate.uppercased().contains("PM") {
+                    eventDate = candidate
+                    cursor += 1
+                }
+            }
+
+            while cursor < min(lines.count, i + 10) {
+                let value = lines[cursor]
+
+                if cursor > i + 1 && (value.contains(" @ ") || value.contains(" vs ")) {
+                    break
+                }
+
+                if market.isEmpty && !value.contains("%") && !value.hasPrefix("+") && !value.hasPrefix("-") {
+                    market = value
+                } else if !market.isEmpty && line.isEmpty && !value.contains("%") {
+                    line = value
+                } else if !line.isEmpty && odds.isEmpty && (value.hasPrefix("+") || value.hasPrefix("-") || Int(value) != nil) {
+                    odds = value
+                    break
+                }
+
+                cursor += 1
+            }
+
+            if !market.isEmpty && !line.isEmpty {
+                props.append(PropPick(
+                    event: event,
+                    eventDate: eventDate,
+                    market: market,
+                    line: line,
+                    odds: odds.isEmpty ? "—" : odds,
+                    source: "DraftKings",
+                    isLock: false,
+                    handlePercent: nil,
+                    betPercent: nil
+                ))
+            }
+
+            i = max(i + 1, cursor)
+        }
+
+        let grouped = Dictionary(grouping: props) { $0.id }
+        return grouped.values.compactMap { $0.first }
+    }
+}
