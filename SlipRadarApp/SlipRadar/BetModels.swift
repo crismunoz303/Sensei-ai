@@ -79,6 +79,51 @@ struct PopularBet: Identifiable, Hashable {
         }
         return "\(betsPercent)% bets / \(moneyPercent)% money"
     }
+
+    var evidenceStrength: String {
+        guard let moneyPercent else { return impliedProbability == nil ? "LIMITED" : "MODERATE" }
+        let edge = moneyPercent - betsPercent
+        if impliedProbability != nil && moneyPercent >= 72 && edge >= 8 { return "STRONG" }
+        if moneyPercent >= 68 || edge >= 6 { return "GOOD" }
+        return "MODERATE"
+    }
+
+    var evidenceNotes: [String] {
+        var notes: [String] = []
+
+        if let impliedProbability {
+            notes.append(String(format: "Market price implies %.1f%% before removing sportsbook margin.", impliedProbability))
+        } else {
+            notes.append("No usable sportsbook price was available, so there is no market-implied probability.")
+        }
+
+        if let moneyPercent {
+            let edge = moneyPercent - betsPercent
+            if edge >= 8 {
+                notes.append("\(moneyPercent)% of money vs \(betsPercent)% of bets: +\(edge) points of money-over-ticket support.")
+            } else {
+                notes.append("\(betsPercent)% of bets and \(moneyPercent)% of money are on this side.")
+            }
+        } else {
+            notes.append("No verified money percentage is available, so public support is less informative.")
+        }
+
+        if source == .draftKings {
+            notes.append("DraftKings split-feed lines can differ by jurisdiction; verify the exact line in your sportsbook before betting.")
+        }
+
+        return notes
+    }
+
+    var riskNote: String {
+        if source == .draftKings {
+            return "Risk: split-feed line may not match your local book."
+        }
+        if moneyPercent == nil {
+            return "Risk: no money-split confirmation."
+        }
+        return "Risk: market pricing and public splits can still be wrong."
+    }
 }
 
 enum SportFilter: String, CaseIterable, Identifiable {
@@ -205,6 +250,43 @@ struct PropPick: Identifiable, Hashable {
             return String(format: "%.1f%% handle / %.1f%% bets (%+.1f%%)", handlePercent, betPercent, diff)
         }
         return "Popular public prop"
+    }
+
+    var evidenceStrength: String {
+        if let handlePercent, let betPercent {
+            let edge = handlePercent - betPercent
+            if impliedProbability != nil && handlePercent >= 70 && edge >= 8 { return "STRONG" }
+            if handlePercent >= 65 || edge >= 6 { return "GOOD" }
+        }
+        if let impliedProbability, impliedProbability >= 60 { return "MODERATE" }
+        return "LIMITED"
+    }
+
+    var evidenceNotes: [String] {
+        var notes: [String] = []
+
+        if let impliedProbability {
+            notes.append(String(format: "Sportsbook price implies %.1f%% before removing sportsbook margin.", impliedProbability))
+        } else {
+            notes.append("No usable sportsbook price is available, so probability cannot be estimated from the market.")
+        }
+
+        if let handlePercent, let betPercent {
+            let edge = handlePercent - betPercent
+            notes.append(String(format: "%.0f%% handle vs %.0f%% bets (%+.0f points).", handlePercent, betPercent, edge))
+        } else {
+            notes.append("No verified public handle-vs-bet split is available for this prop.")
+        }
+
+        notes.append("Verify the exact player, line, and price in your sportsbook before adding it to a real wager.")
+        return notes
+    }
+
+    var riskNote: String {
+        if handlePercent == nil || betPercent == nil {
+            return "Risk: market price only; no independent public split confirmation."
+        }
+        return "Risk: prop markets can move quickly with lineup, injury, and price changes."
     }
 }
 

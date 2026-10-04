@@ -393,6 +393,12 @@ struct ContentView: View {
                 .font(.system(size: 11, weight: .semibold))
                 .foregroundStyle(Color.green.opacity(0.9))
 
+            evidenceBox(
+                strength: bet.evidenceStrength,
+                notes: bet.evidenceNotes,
+                risk: bet.riskNote
+            )
+
             addButton(
                 title: "Add to My Slip",
                 isAdded: slip.contains(where: { $0.id == betSlipID(bet) })
@@ -445,6 +451,12 @@ struct ContentView: View {
                 .font(.system(size: 10, weight: .bold))
                 .foregroundStyle(.white.opacity(0.42))
 
+            evidenceBox(
+                strength: prop.evidenceStrength,
+                notes: prop.evidenceNotes,
+                risk: prop.riskNote
+            )
+
             addButton(
                 title: "Add Prop to My Slip",
                 isAdded: slip.contains(where: { $0.id == prop.id })
@@ -493,6 +505,34 @@ struct ContentView: View {
         .background(Color.white.opacity(0.055), in: RoundedRectangle(cornerRadius: 18))
     }
 
+    private func evidenceBox(strength: String, notes: [String], risk: String) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack {
+                Text("WHY THIS PICK")
+                    .font(.system(size: 9, weight: .black))
+                    .foregroundStyle(.white.opacity(0.45))
+                Spacer()
+                Text("\(strength) EVIDENCE")
+                    .font(.system(size: 9, weight: .black))
+                    .foregroundStyle(strength == "STRONG" ? Color.green : .white.opacity(0.65))
+            }
+
+            ForEach(Array(notes.enumerated()), id: \.offset) { _, note in
+                Text("• \(note)")
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundStyle(.white.opacity(0.72))
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+
+            Text(risk)
+                .font(.system(size: 10, weight: .semibold))
+                .foregroundStyle(.orange.opacity(0.85))
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .padding(12)
+        .background(Color.white.opacity(0.045), in: RoundedRectangle(cornerRadius: 12))
+    }
+
     private func addButton(title: String, isAdded: Bool, action: @escaping () -> Void) -> some View {
         Button(action: action) {
             Text(isAdded ? "Added ✓" : title)
@@ -506,8 +546,8 @@ struct ContentView: View {
 
     private var footer: some View {
         VStack(spacing: 5) {
-            Text("IMPLIED % comes from the listed source odds. SIGNAL % is SlipRadar's public-data confidence score.")
-            Text("DraftKings split-feed lines can differ by jurisdiction and are not treated as locally verified sportsbook lines.")
+            Text("Evidence strength combines market price quality with available public betting confirmation; it is not a guaranteed win probability.")
+            Text("Always verify the exact current line and price in your sportsbook before placing a wager.")
         }
         .font(.system(size: 10))
         .multilineTextAlignment(.center)
