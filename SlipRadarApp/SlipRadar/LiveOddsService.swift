@@ -301,6 +301,11 @@ enum LiveOddsService {
 
     static func lineStatus(for bet: PopularBet, consensus: LiveMarketConsensus?) -> LiveLineStatus {
         guard let consensus else { return .unverified }
+
+        if Date().timeIntervalSince(consensus.lastUpdated) > 15 * 60 {
+            return .stale
+        }
+
         let requested = numericPoint(bet.side)
         if let requested, let livePoint = consensus.point {
             return abs(requested - livePoint) < 0.001 ? .live : .mismatch
@@ -332,7 +337,7 @@ enum LiveOddsService {
                 let groups = Dictionary(grouping: market.outcomes) { outcome -> String in
                     switch market.key {
                     case "spreads":
-                        return outcome.name + "|" + String(format: "%.3f", outcome.point ?? 0)
+                        return String(format: "%.3f", abs(outcome.point ?? 0))
                     case "totals":
                         return String(format: "%.3f", outcome.point ?? 0)
                     default:

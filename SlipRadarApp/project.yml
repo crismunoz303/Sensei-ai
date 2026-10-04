@@ -15,7 +15,7 @@ targets:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.crismunoz.slipradar
         PRODUCT_NAME: SlipRadar
-        CURRENT_PROJECT_VERSION: 9
+        CURRENT_PROJECT_VERSION: 10
         MARKETING_VERSION: 0.9
         TARGETED_DEVICE_FAMILY: "1"
         SWIFT_VERSION: "5.0"

@@ -19,6 +19,17 @@ struct TrackedPick: Identifiable, Codable {
     let evidenceScore: Int
     let verdict: String
     var outcome: PickOutcome
+
+    let sport: String?
+    let marketProbability: Double?
+    let playerName: String?
+    let threshold: Double?
+    let direction: String?
+
+    var lastSeenOdds: String?
+    var lastSeenFairProbability: Double?
+    var lastSeenAt: Date?
+    var outcomeSource: String?
 }
 
 struct PerformanceSummary {
@@ -29,6 +40,7 @@ struct PerformanceSummary {
     let pushes: Int
     let winRate: Double?
     let flatStakeROI: Double?
+    let averageCLV: Double?
 }
 
 struct CalibrationResult {
@@ -73,15 +85,40 @@ enum PerformanceStore {
             estimatedProbability: leg.probability,
             evidenceScore: leg.evidenceScore,
             verdict: leg.signal,
-            outcome: .pending
+            outcome: .pending,
+            sport: leg.sport,
+            marketProbability: leg.marketProbability,
+            playerName: leg.playerName,
+            threshold: leg.threshold,
+            direction: leg.direction,
+            lastSeenOdds: nil,
+            lastSeenFairProbability: nil,
+            lastSeenAt: nil,
+            outcomeSource: nil
         ))
         save(picks)
     }
 
-    static func setOutcome(id: String, outcome: PickOutcome) {
+    static func setOutcome(id: String, outcome: PickOutcome, source: String = "Manual") {
         var picks = load()
         guard let index = picks.firstIndex(where: { $0.id == id }) else { return }
         picks[index].outcome = outcome
+        picks[index].outcomeSource = source
+        save(picks)
+    }
+
+    static func updateLatestMarket(
+        id: String,
+        odds: String?,
+        fairProbability: Double?,
+        observedAt: Date = Date()
+    ) {
+        var picks = load()
+        guard let index = picks.firstIndex(where: { $0.id == id }) else { return }
+
+        picks[index].lastSeenOdds = odds
+        picks[index].lastSeenFairProbability = fairProbability
+        picks[index].lastSeenAt = observedAt
         save(picks)
     }
 
@@ -129,6 +166,15 @@ enum PerformanceStore {
 
         let roi = gradedWithOdds > 0 ? profit / Double(gradedWithOdds) * 100.0 : nil
 
+        let clvValues = settledPicks.compactMap { pick -> Double? in
+            guard let entry = pick.marketProbability,
+                  let latest = pick.lastSeenFairProbability else { return nil }
+            return latest - entry
+        }
+        let averageCLV = clvValues.isEmpty
+            ? nil
+            : clvValues.reduce(0, +) / Double(clvValues.count)
+
         return PerformanceSummary(
             totalTracked: picks.count,
             settled: settledPicks.count,
@@ -136,7 +182,8 @@ enum PerformanceStore {
             losses: losses,
             pushes: pushes,
             winRate: winRate,
-            flatStakeROI: roi
+            flatStakeROI: roi,
+            averageCLV: averageCLV
         )
     }
 
@@ -151,16 +198,16 @@ enum PerformanceStore {
             return abs(probability - rawProbability) <= 7.5
         }
 
-        guard bucket.count >= 10 else { return nil }
+        guard bucket.count >= 20 else { return nil }
 
         let wins = bucket.filter { $0.outcome == .win }.count
         let observed = Double(wins) / Double(bucket.count) * 100.0
 
-        let dataWeight = min(0.55, Double(bucket.count) / 100.0)
+        let dataWeight = min(0.45, Double(bucket.count) / 150.0)
         let calibrated = rawProbability * (1.0 - dataWeight) + observed * dataWeight
 
         return CalibrationResult(
-            probability: min(99, max(1, calibrated)),
+            probability: min(98, max(2, calibrated)),
             sampleSize: bucket.count,
             observedWinRate: observed
         )
@@ -174,6 +221,19 @@ enum PerformanceStore {
             let losses = group.filter { $0.outcome == .loss }.count
             let rate = group.isEmpty ? nil : Double(wins) / Double(group.count) * 100.0
             return (verdict.rawValue, group.count, wins, losses, rate)
+        }
+    }
+
+    static func breakdownBySport() -> [(label: String, count: Int, wins: Int, losses: Int, winRate: Double?)] {
+        let settled = load().filter { $0.outcome == .win || $0.outcome == .loss }
+        let groups = Dictionary(grouping: settled) { $0.sport ?? "Unknown" }
+
+        return groups.keys.sorted().map { sport in
+            let group = groups[sport] ?? []
+            let wins = group.filter { $0.outcome == .win }.count
+            let losses = group.filter { $0.outcome == .loss }.count
+            let rate = group.isEmpty ? nil : Double(wins) / Double(group.count) * 100.0
+            return (sport, group.count, wins, losses, rate)
         }
     }
 

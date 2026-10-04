@@ -41,7 +41,7 @@ jobs:
       - name: Package IPA
         working-directory: SlipRadarApp
         run: |
-          rm -rf Payload SlipRadar-v0.9-live-stat-model-unsigned.ipa
+          rm -rf Payload SlipRadar-v0.9-complete-live-stat-model-unsigned.ipa
           mkdir -p Payload
           cp -R build/Build/Products/Release-iphoneos/SlipRadar.app Payload/
 
@@ -54,11 +54,11 @@ jobs:
           test -x Payload/SlipRadar.app/SlipRadar
 
           # -X strips ZIP extra fields that can confuse some IPA re-signers.
-          /usr/bin/zip -X -qry SlipRadar-v0.9-live-stat-model-unsigned.ipa Payload
-          unzip -t SlipRadar-v0.9-live-stat-model-unsigned.ipa
+          /usr/bin/zip -X -qry SlipRadar-v0.9-complete-live-stat-model-unsigned.ipa Payload
+          unzip -t SlipRadar-v0.9-complete-live-stat-model-unsigned.ipa
 
       - name: Upload IPA
         uses: actions/upload-artifact@v4
         with:
-          name: SlipRadar-v0.9-live-stat-model-unsigned-ipa
-          path: SlipRadarApp/SlipRadar-v0.9-live-stat-model-unsigned.ipa
+          name: SlipRadar-v0.9-complete-live-stat-model-unsigned-ipa
+          path: SlipRadarApp/SlipRadar-v0.9-complete-live-stat-model-unsigned.ipa

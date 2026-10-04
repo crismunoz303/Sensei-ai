@@ -28,6 +28,7 @@ struct ContentView: View {
 
     @State private var showSettings = false
     @State private var performanceToken = UUID()
+    @State private var autoGrading = false
 
     init() {
         _slip = State(initialValue: SlipStore.load())
@@ -185,6 +186,11 @@ struct ContentView: View {
         }
         .onChange(of: selectedSport) { _, _ in
             refresh()
+        }
+        .onChange(of: selectedSection) { _, section in
+            if section == .performance {
+                Task { await autoGradePending() }
+            }
         }
     }
 
@@ -451,6 +457,10 @@ struct ContentView: View {
     private var performanceSection: some View {
         performanceSummaryCard
         performanceBreakdownCard
+
+        if autoGrading {
+            inlineLoading("Checking finished team bets against final scores…")
+        }
 
         if trackedPicks.isEmpty {
             emptyCard(
@@ -958,9 +968,23 @@ struct ContentView: View {
         let summary = PerformanceStore.summary()
 
         return VStack(alignment: .leading, spacing: 8) {
-            Text("MODEL SCORECARD")
-                .font(.system(size: 18, weight: .black))
-                .foregroundStyle(.white)
+            HStack {
+                Text("MODEL SCORECARD")
+                    .font(.system(size: 18, weight: .black))
+                    .foregroundStyle(.white)
+
+                Spacer()
+
+                if autoGrading {
+                    ProgressView().tint(.green)
+                } else {
+                    Button("Auto Grade") {
+                        Task { await autoGradePending() }
+                    }
+                    .font(.system(size: 10, weight: .black))
+                    .foregroundStyle(Color.green)
+                }
+            }
 
             HStack(spacing: 18) {
                 metric("TRACKED", "\(summary.totalTracked)")
@@ -971,9 +995,12 @@ struct ContentView: View {
                 if let roi = summary.flatStakeROI {
                     metric("1U ROI", String(format: "%+.1f%%", roi))
                 }
+                if let clv = summary.averageCLV {
+                    metric("CLV EST.", String(format: "%+.1f pts", clv))
+                }
             }
 
-            Text("Calibration activates only after enough settled picks exist in a probability range. Small samples do not rewrite the model.")
+            Text("Team results can auto-grade from final scores. Player props keep manual grading when a reliable result match is unavailable. Calibration waits for 20+ comparable settled picks.")
                 .font(.system(size: 10, weight: .medium))
                 .foregroundStyle(.white.opacity(0.45))
         }
@@ -1063,6 +1090,18 @@ struct ContentView: View {
             .font(.system(size: 9, weight: .bold))
             .foregroundStyle(.white.opacity(0.42))
 
+            if let latest = pick.lastSeenFairProbability {
+                Text(String(format: "Latest market fair %.1f%%%@", latest, pick.marketProbability.map { String(format: " • CLV est. %+.1f pts", latest - $0) } ?? ""))
+                    .font(.system(size: 9, weight: .bold))
+                    .foregroundStyle(.white.opacity(0.42))
+            }
+
+            if let source = pick.outcomeSource, pick.outcome != .pending {
+                Text("Graded: \(source)")
+                    .font(.system(size: 9, weight: .bold))
+                    .foregroundStyle(.white.opacity(0.4))
+            }
+
             if pick.outcome == .pending {
                 HStack(spacing: 8) {
                     gradeButton("Win", pick: pick, outcome: .win)
@@ -1144,17 +1183,23 @@ struct ContentView: View {
 
         guard !slipIsAtLimit else { return }
 
+        let live = LiveOddsService.matchConsensus(for: bet, in: liveTeamConsensus)
         let leg = SlipLeg(
             id: id,
             title: bet.side,
             subtitle: "\(bet.matchup) • \(bet.market)",
             source: bet.source.rawValue,
             signal: report.verdict.rawValue,
+            sport: selectedSport.rawValue,
             event: bet.matchup,
             market: bet.market,
-            odds: LiveOddsService.matchConsensus(for: bet, in: liveTeamConsensus)?.bestOdds ?? bet.odds,
+            odds: live?.bestOdds ?? bet.odds,
             probability: report.modelProbability ?? report.fairProbability,
+            marketProbability: report.fairProbability,
             evidenceScore: report.evidenceScore,
+            playerName: nil,
+            threshold: nil,
+            direction: nil,
             addedAt: Date()
         )
 
@@ -1173,17 +1218,23 @@ struct ContentView: View {
 
         guard !slipIsAtLimit else { return }
 
+        let verification = propVerifications[prop.id]
         let leg = SlipLeg(
             id: prop.id,
             title: prop.line,
             subtitle: "\(prop.event) • \(prop.market)",
             source: prop.source,
             signal: report.verdict.rawValue,
+            sport: selectedSport.rawValue,
             event: prop.event,
             market: prop.market,
-            odds: propVerifications[prop.id]?.bestOdds ?? prop.odds,
+            odds: verification?.bestOdds ?? prop.odds,
             probability: report.modelProbability ?? report.fairProbability,
+            marketProbability: report.fairProbability,
             evidenceScore: report.evidenceScore,
+            playerName: prop.playerName.isEmpty ? nil : prop.playerName,
+            threshold: prop.threshold,
+            direction: prop.direction,
             addedAt: Date()
         )
 
@@ -1235,6 +1286,18 @@ struct ContentView: View {
                     if selectedSport == sport {
                         liveTeamConsensus = result
                         liveTeamLoading = false
+
+                        for bet in board {
+                            if let live = LiveOddsService.matchConsensus(for: bet, in: result) {
+                                PerformanceStore.updateLatestMarket(
+                                    id: betSlipID(bet),
+                                    odds: live.bestOdds,
+                                    fairProbability: live.fairProbability,
+                                    observedAt: live.lastUpdated
+                                )
+                            }
+                        }
+                        performanceToken = UUID()
                     }
                 }
             } catch {
@@ -1265,6 +1328,13 @@ struct ContentView: View {
                 await MainActor.run {
                     propVerifications[prop.id] = result
                     propVerificationLoading.remove(prop.id)
+                    PerformanceStore.updateLatestMarket(
+                        id: prop.id,
+                        odds: result.bestOdds,
+                        fairProbability: result.fairProbability,
+                        observedAt: result.checkedAt
+                    )
+                    performanceToken = UUID()
                 }
             } catch {
                 await MainActor.run {
@@ -1286,6 +1356,32 @@ struct ContentView: View {
                     )
                     propVerificationLoading.remove(prop.id)
                 }
+            }
+        }
+    }
+
+    @MainActor
+    private func autoGradePending() async {
+        guard !autoGrading else { return }
+
+        let pending = PerformanceStore.load().filter {
+            $0.outcome == .pending && $0.playerName == nil
+        }
+        guard !pending.isEmpty else { return }
+
+        autoGrading = true
+        defer {
+            autoGrading = false
+            performanceToken = UUID()
+        }
+
+        for pick in pending.prefix(20) {
+            if let outcome = await ResultAutoGrader.grade(pick) {
+                PerformanceStore.setOutcome(
+                    id: pick.id,
+                    outcome: outcome,
+                    source: "Auto • ESPN final score"
+                )
             }
         }
     }

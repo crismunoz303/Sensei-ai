@@ -210,12 +210,30 @@ struct PropPick: Identifiable, Hashable {
     }
 
     var playerName: String {
-        let candidates = [line, market]
-        for candidate in candidates {
-            let lower = candidate.lowercased()
-            for separator in [" over ", " under ", " - ", " o", " u"] {
-                if let range = lower.range(of: separator) {
+        for candidate in [line, market] {
+            for separator in [" over ", " under ", " - "] {
+                if let range = candidate.range(of: separator, options: [.caseInsensitive]) {
                     let prefix = String(candidate[..<range.lowerBound]).trimmingCharacters(in: .whitespacesAndNewlines)
+                    if prefix.split(separator: " ").count >= 2 { return prefix }
+                }
+            }
+
+            if let regex = try? NSRegularExpression(pattern: #"\s+[oOuU]\s*\d"#) {
+                let ns = candidate as NSString
+                let full = NSRange(location: 0, length: ns.length)
+                if let match = regex.firstMatch(in: candidate, range: full) {
+                    let prefix = ns.substring(with: NSRange(location: 0, length: match.range.location))
+                        .trimmingCharacters(in: .whitespacesAndNewlines)
+                    if prefix.split(separator: " ").count >= 2 { return prefix }
+                }
+            }
+
+            if let regex = try? NSRegularExpression(pattern: #"\s+\d+(?:\.\d+)?"#) {
+                let ns = candidate as NSString
+                let full = NSRange(location: 0, length: ns.length)
+                if let match = regex.firstMatch(in: candidate, range: full) {
+                    let prefix = ns.substring(with: NSRange(location: 0, length: match.range.location))
+                        .trimmingCharacters(in: .whitespacesAndNewlines)
                     if prefix.split(separator: " ").count >= 2 { return prefix }
                 }
             }
@@ -224,12 +242,16 @@ struct PropPick: Identifiable, Hashable {
     }
 
     var threshold: Double? {
-        let combined = line + " " + market
-        guard let regex = try? NSRegularExpression(pattern: #"\d+(?:\.\d+)?"#) else { return nil }
-        let ns = combined as NSString
-        let matches = regex.matches(in: combined, range: NSRange(location: 0, length: ns.length))
-        guard let match = matches.last else { return nil }
-        return Double(ns.substring(with: match.range))
+        for candidate in [line, market] {
+            guard let regex = try? NSRegularExpression(pattern: #"\d+(?:\.\d+)?"#) else { continue }
+            let ns = candidate as NSString
+            let matches = regex.matches(in: candidate, range: NSRange(location: 0, length: ns.length))
+            if let match = matches.last,
+               let value = Double(ns.substring(with: match.range)) {
+                return value
+            }
+        }
+        return nil
     }
 
     var direction: String? {
@@ -366,10 +388,15 @@ struct SlipLeg: Identifiable, Hashable, Codable {
     let subtitle: String
     let source: String
     let signal: String
+    let sport: String
     let event: String
     let market: String
     let odds: String?
     let probability: Double?
+    let marketProbability: Double?
     let evidenceScore: Int
+    let playerName: String?
+    let threshold: Double?
+    let direction: String?
     let addedAt: Date
 }
