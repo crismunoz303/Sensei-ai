@@ -23,6 +23,8 @@ private struct MarketSnapshot: Codable {
 
 enum MarketHistoryStore {
     private static let storageKey = "SlipRadar.marketSnapshots.v08"
+    private static var memoryCache: [MarketSnapshot]?
+    private static let cacheLock = NSLock()
 
     static func record(bets: [PopularBet]) {
         var snapshots = load()
@@ -151,14 +153,32 @@ enum MarketHistoryStore {
     }
 
     private static func load() -> [MarketSnapshot] {
-        guard let data = UserDefaults.standard.data(forKey: storageKey),
-              let decoded = try? JSONDecoder().decode([MarketSnapshot].self, from: data) else {
-            return []
+        cacheLock.lock()
+        if let cached = memoryCache {
+            cacheLock.unlock()
+            return cached
         }
+        cacheLock.unlock()
+
+        let decoded: [MarketSnapshot]
+        if let data = UserDefaults.standard.data(forKey: storageKey),
+           let value = try? JSONDecoder().decode([MarketSnapshot].self, from: data) {
+            decoded = value
+        } else {
+            decoded = []
+        }
+
+        cacheLock.lock()
+        memoryCache = decoded
+        cacheLock.unlock()
         return decoded
     }
 
     private static func save(_ snapshots: [MarketSnapshot]) {
+        cacheLock.lock()
+        memoryCache = snapshots
+        cacheLock.unlock()
+
         guard let data = try? JSONEncoder().encode(snapshots) else { return }
         UserDefaults.standard.set(data, forKey: storageKey)
     }

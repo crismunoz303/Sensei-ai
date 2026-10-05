@@ -49,6 +49,11 @@ struct ContentView: View {
     @State private var autoGrading = false
     @State private var trackingUpdateScheduled = false
 
+    @State private var scoredBetCache: [ScoredBet] = []
+    @State private var scoredPropCache: [ScoredProp] = []
+    @State private var scoringToken = UUID()
+    @State private var scoringInProgress = false
+
     private var publicBoard: [PopularBet] {
         resultsBySource.values.flatMap { $0 }
     }
@@ -69,51 +74,11 @@ struct ContentView: View {
     }
 
     private var scoredBets: [ScoredBet] {
-        board.map { bet in
-            let sport = bet.sport ?? selectedSport
-            let live = LiveOddsService.matchConsensus(for: bet, in: liveConsensus(for: sport))
-            let projection = teamProjections[projectionKey(sport, bet.matchup)]
-            let context = EventContextService.matchContext(
-                event: bet.matchup,
-                sport: sport,
-                contexts: eventContextsBySport[sport] ?? []
-            )
-            let sameSportBoard = board.filter { ($0.sport ?? selectedSport) == sport }
-
-            return ScoredBet(
-                sport: sport,
-                bet: bet,
-                report: DecisionEngine.report(
-                    for: bet,
-                    board: sameSportBoard,
-                    liveConsensus: live,
-                    teamProjection: projection,
-                    eventContext: context,
-                    liveConfigured: liveConfigured
-                )
-            )
-        }
-        .sorted(by: scoredBetSort)
+        scoredBetCache
     }
 
     private var scoredProps: [ScoredProp] {
-        props.map { prop in
-            let sport = prop.sport ?? selectedSport
-            return ScoredProp(
-                sport: sport,
-                prop: prop,
-                report: DecisionEngine.report(
-                    for: prop,
-                    projection: propProjections[propKey(sport, prop)],
-                    matchupProjection: teamProjections[projectionKey(sport, prop.event)],
-                    verification: propVerifications[propKey(sport, prop)],
-                    contextText: contextText,
-                    availability: propAvailability[propKey(sport, prop)],
-                    liveConfigured: liveConfigured
-                )
-            )
-        }
-        .sorted(by: scoredPropSort)
+        scoredPropCache
     }
 
     private var teamPicks: [ScoredBet] {
@@ -261,7 +226,7 @@ struct ContentView: View {
                     .font(.system(size: 27, weight: .black, design: .rounded))
                     .foregroundStyle(.white)
 
-                Text("FULL MODEL • v1.0.1 • \(ModelVersion.current)")
+                Text("FULL MODEL • v1.0.2 • \(ModelVersion.current)")
                     .font(.system(size: 10, weight: .bold, design: .rounded))
                     .tracking(1.0)
                     .foregroundStyle(Color.green)
@@ -430,7 +395,9 @@ struct ContentView: View {
     private var bestSection: some View {
         statusPanel
 
-        if (selectedSport == .all && allBoardLoading && scoredBets.isEmpty) ||
+        if scoringInProgress && scoredBets.isEmpty {
+            loadingCard("Ranking lines in the background…")
+        } else if (selectedSport == .all && allBoardLoading && scoredBets.isEmpty) ||
             (!loadingSources.isEmpty && scoredBets.isEmpty) {
             loadingCard("Building ranked statistical + market board…")
         } else if scoredBets.isEmpty {
@@ -483,7 +450,9 @@ struct ContentView: View {
         } else {
             propStatusPanel
 
-            if loadingProps && props.isEmpty {
+            if scoringInProgress && scoredProps.isEmpty && !props.isEmpty {
+                loadingCard("Ranking props in the background…")
+            } else if loadingProps && props.isEmpty {
                 loadingCard("Loading and modeling player props…")
             } else if scoredProps.isEmpty {
                 emptyCard("NO PROPS FOUND", "No current public player props were returned for this sport.")
@@ -614,7 +583,7 @@ struct ContentView: View {
                 .frame(width: 8, height: 8)
 
             VStack(alignment: .leading, spacing: 2) {
-                Text("\(scoredBets.count) lines ranked")
+                Text(scoringInProgress ? "\(scoredBets.count) lines ranked • updating…" : "\(scoredBets.count) lines ranked")
                     .font(.system(size: 13, weight: .semibold))
                     .foregroundStyle(.white)
 
@@ -642,7 +611,9 @@ struct ContentView: View {
                 .frame(width: 8, height: 8)
 
             VStack(alignment: .leading, spacing: 2) {
-                Text(loadingProps ? "Loading player props…" : "\(scoredProps.count) props ranked")
+                Text(loadingProps ? "Loading player props…" :
+                    scoringInProgress ? "\(scoredProps.count) props ranked • updating…" :
+                    "\(scoredProps.count) props ranked")
                     .font(.system(size: 13, weight: .semibold))
                     .foregroundStyle(.white)
 
@@ -2045,6 +2016,11 @@ struct ContentView: View {
         eventContextsBySport = [:]
         contextLoadingSports = []
 
+        scoredBetCache = []
+        scoredPropCache = []
+        scoringToken = UUID()
+        scoringInProgress = false
+
         apiKey = SecretStore.loadOddsAPIKey()
         refreshToken = UUID()
         lastUpdated = Date()
@@ -2086,9 +2062,9 @@ struct ContentView: View {
                         allBoardLoading = false
                         lastUpdated = Date()
 
+                        scheduleScoring()
                         scheduleTeamProjectionLoad()
                         loadEventContexts(for: Array(boards.keys))
-                        scheduleDeferredTracking()
                     }
                 } catch {
                     await MainActor.run {
@@ -2114,7 +2090,7 @@ struct ContentView: View {
                             oddsUsage = usage
                             liveTeamLoading = false
                             lastUpdated = Date()
-                            scheduleDeferredTracking()
+                            scheduleScoring()
                         }
                     }
                 } catch {
@@ -2146,6 +2122,8 @@ struct ContentView: View {
             loadingSources.remove(source)
             lastUpdated = Date()
 
+            scheduleScoring()
+
             if selectedSport != .all {
                 scheduleTeamProjectionLoad()
             }
@@ -2157,6 +2135,7 @@ struct ContentView: View {
             resultsBySource[source] = []
             loadingSources.remove(source)
             lastUpdated = Date()
+            scheduleScoring()
         }
     }
 
@@ -2174,6 +2153,7 @@ struct ContentView: View {
             MarketHistoryStore.record(props: parsed)
             loadingProps = false
             lastUpdated = Date()
+            scheduleScoring()
             schedulePropProjectionLoad(parsed, sport: sport)
         }
     }
@@ -2183,6 +2163,7 @@ struct ContentView: View {
             props = []
             loadingProps = false
             lastUpdated = Date()
+            scheduleScoring()
         }
     }
 
@@ -2190,6 +2171,7 @@ struct ContentView: View {
         DispatchQueue.main.async {
             contextText = text
             contextLoaded = true
+            scheduleScoring()
         }
     }
 
@@ -2197,6 +2179,7 @@ struct ContentView: View {
         DispatchQueue.main.async {
             contextText = ""
             contextLoaded = false
+            scheduleScoring()
         }
     }
 
@@ -2221,7 +2204,7 @@ struct ContentView: View {
         let limit = selectedSport == .all ? 6 : 6
         let work = Array(candidates.prefix(limit))
         guard !work.isEmpty else {
-            scheduleDeferredTracking()
+            scheduleScoring()
             return
         }
 
@@ -2255,6 +2238,9 @@ struct ContentView: View {
                 }
             }
 
+            await MainActor.run {
+                scheduleScoring()
+            }
             try? await Task.sleep(nanoseconds: 120_000_000)
             await MainActor.run {
                 scheduleTeamProjectionLoad()
@@ -2273,7 +2259,7 @@ struct ContentView: View {
         }
         let work = Array(candidates.prefix(6))
         guard !work.isEmpty else {
-            scheduleDeferredTracking()
+            scheduleScoring()
             return
         }
 
@@ -2343,6 +2329,9 @@ struct ContentView: View {
                 }
             }
 
+            await MainActor.run {
+                scheduleScoring()
+            }
             try? await Task.sleep(nanoseconds: 120_000_000)
             await MainActor.run {
                 autoVerifyTopProps()
@@ -2442,7 +2431,7 @@ struct ContentView: View {
 
                 propVerificationLoading.remove(key)
                 performanceToken = UUID()
-                scheduleDeferredTracking()
+                scheduleScoring()
             }
         }
     }
@@ -2459,6 +2448,126 @@ struct ContentView: View {
                 await MainActor.run {
                     eventContextsBySport[sport] = contexts
                     contextLoadingSports.remove(sport)
+                    scheduleScoring()
+                }
+            }
+        }
+    }
+
+    private func scheduleScoring() {
+        let token = UUID()
+        scoringToken = token
+        scoringInProgress = true
+
+        // Debounce rapid model/context updates. Only the newest snapshot is allowed
+        // to start a scoring pass, which prevents CPU pileups while batches load.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.14) {
+            guard scoringToken == token else { return }
+
+            let boardSnapshot = board
+            let propsSnapshot = props
+            let selectedSnapshot = selectedSport
+            let liveTeamSnapshot = liveTeamConsensus
+            let allLiveSnapshot = allLiveBySport
+            let teamProjectionSnapshot = teamProjections
+            let propProjectionSnapshot = propProjections
+            let propVerificationSnapshot = propVerifications
+            let availabilitySnapshot = propAvailability
+            let eventContextsSnapshot = eventContextsBySport
+            let contextTextSnapshot = contextText
+            let liveConfiguredSnapshot = liveConfigured
+
+            DispatchQueue.global(qos: .userInitiated).async {
+                let boardBySport = Dictionary(grouping: boardSnapshot) { bet in
+                    bet.sport ?? selectedSnapshot
+                }
+
+                let rankedBets: [ScoredBet] = boardSnapshot.map { bet in
+                    let sport = bet.sport ?? selectedSnapshot
+                    let liveList: [LiveMarketConsensus] = {
+                        if selectedSnapshot == .all {
+                            return allLiveSnapshot[sport] ?? []
+                        }
+                        return sport == selectedSnapshot ? liveTeamSnapshot : []
+                    }()
+
+                    let live = LiveOddsService.matchConsensus(for: bet, in: liveList)
+                    let projectionKey = "\(sport.rawValue)|\(MarketKey.normalized(bet.matchup))"
+                    let projection = teamProjectionSnapshot[projectionKey]
+                    let context = EventContextService.matchContext(
+                        event: bet.matchup,
+                        sport: sport,
+                        contexts: eventContextsSnapshot[sport] ?? []
+                    )
+
+                    return ScoredBet(
+                        sport: sport,
+                        bet: bet,
+                        report: DecisionEngine.report(
+                            for: bet,
+                            board: boardBySport[sport] ?? [],
+                            liveConsensus: live,
+                            teamProjection: projection,
+                            eventContext: context,
+                            liveConfigured: liveConfiguredSnapshot
+                        )
+                    )
+                }
+                .sorted { lhs, rhs in
+                    let l = lhs.report
+                    let r = rhs.report
+
+                    if l.verdict.rank != r.verdict.rank { return l.verdict.rank > r.verdict.rank }
+
+                    let lEdge = l.estimatedEdge ?? -999
+                    let rEdge = r.estimatedEdge ?? -999
+                    if abs(lEdge - rEdge) > 0.01 { return lEdge > rEdge }
+
+                    if l.liveStatus.rank != r.liveStatus.rank { return l.liveStatus.rank > r.liveStatus.rank }
+                    if l.dataQuality != r.dataQuality { return l.dataQuality > r.dataQuality }
+                    return l.evidenceScore > r.evidenceScore
+                }
+
+                let rankedProps: [ScoredProp] = propsSnapshot.map { prop in
+                    let sport = prop.sport ?? selectedSnapshot
+                    let key = "\(sport.rawValue)|\(prop.id)"
+                    let matchupKey = "\(sport.rawValue)|\(MarketKey.normalized(prop.event))"
+
+                    return ScoredProp(
+                        sport: sport,
+                        prop: prop,
+                        report: DecisionEngine.report(
+                            for: prop,
+                            projection: propProjectionSnapshot[key],
+                            matchupProjection: teamProjectionSnapshot[matchupKey],
+                            verification: propVerificationSnapshot[key],
+                            contextText: contextTextSnapshot,
+                            availability: availabilitySnapshot[key],
+                            liveConfigured: liveConfiguredSnapshot
+                        )
+                    )
+                }
+                .sorted { lhs, rhs in
+                    let l = lhs.report
+                    let r = rhs.report
+
+                    if l.verdict.rank != r.verdict.rank { return l.verdict.rank > r.verdict.rank }
+
+                    let lEdge = l.estimatedEdge ?? -999
+                    let rEdge = r.estimatedEdge ?? -999
+                    if abs(lEdge - rEdge) > 0.01 { return lEdge > rEdge }
+
+                    if l.liveStatus.rank != r.liveStatus.rank { return l.liveStatus.rank > r.liveStatus.rank }
+                    if l.dataQuality != r.dataQuality { return l.dataQuality > r.dataQuality }
+                    return l.evidenceScore > r.evidenceScore
+                }
+
+                DispatchQueue.main.async {
+                    guard scoringToken == token else { return }
+                    scoredBetCache = rankedBets
+                    scoredPropCache = rankedProps
+                    scoringInProgress = false
+                    scheduleDeferredTracking()
                 }
             }
         }

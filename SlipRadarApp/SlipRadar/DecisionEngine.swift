@@ -112,14 +112,14 @@ enum DecisionEngine {
             model = calibrated.probability
         }
 
-        let fallbackFair = fairProbability(for: bet, board: board)
+        let fallbackFair = liveConsensus == nil ? fairProbability(for: bet, board: board) : nil
         let fair = liveConsensus?.fairProbability ?? fallbackFair
         let market = liveConsensus?.averageImpliedProbability ?? bet.impliedProbability
         let lineStatus: LiveLineStatus = {
             if !liveConfigured { return .notConnected }
             return LiveOddsService.lineStatus(for: bet, consensus: liveConsensus)
         }()
-        let sources = sourceCount(for: bet, board: board)
+        let sources = bet.source == .multiBook ? 0 : sourceCount(for: bet, board: board)
         let movement = MarketHistoryStore.movement(for: bet)
 
         var evidence = 0

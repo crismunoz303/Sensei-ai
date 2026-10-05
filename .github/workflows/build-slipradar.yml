@@ -32,7 +32,7 @@ jobs:
       - name: Package IPA
         working-directory: SlipRadarApp
         run: |
-          rm -rf Payload SlipRadar-v1.0.1-ui-hotfix-unsigned.ipa
+          rm -rf Payload SlipRadar-v1.0.2-async-ranking-fix-unsigned.ipa
           mkdir -p Payload
           cp -R build/Build/Products/Release-iphoneos/SlipRadar.app Payload/
           rm -rf Payload/SlipRadar.app/_CodeSignature
@@ -40,11 +40,11 @@ jobs:
           xattr -cr Payload/SlipRadar.app || true
           plutil -lint Payload/SlipRadar.app/Info.plist
           test -x Payload/SlipRadar.app/SlipRadar
-          /usr/bin/zip -X -qry SlipRadar-v1.0.1-ui-hotfix-unsigned.ipa Payload
-          unzip -t SlipRadar-v1.0.1-ui-hotfix-unsigned.ipa
+          /usr/bin/zip -X -qry SlipRadar-v1.0.2-async-ranking-fix-unsigned.ipa Payload
+          unzip -t SlipRadar-v1.0.2-async-ranking-fix-unsigned.ipa
 
       - name: Upload IPA
         uses: actions/upload-artifact@v4
         with:
-          name: SlipRadar-v1.0.1-ui-hotfix-unsigned-ipa
-          path: SlipRadarApp/SlipRadar-v1.0.1-ui-hotfix-unsigned.ipa
+          name: SlipRadar-v1.0.2-async-ranking-fix-unsigned-ipa
+          path: SlipRadarApp/SlipRadar-v1.0.2-async-ranking-fix-unsigned.ipa
